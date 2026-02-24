@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+webthief_output/
+test_output/
+*_clone/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/

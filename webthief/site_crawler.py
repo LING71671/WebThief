@@ -1,0 +1,364 @@
+"""
+站点递归抓取器：
+- 同 host BFS 递归抓取
+- 登录墙检测 + 人工认证暂停
+- 会话缓存（加密）
+- 页面链接本地重写与落盘
+"""
+
+from __future__ import annotations
+
+import json
+from collections import deque
+from pathlib import Path
+from urllib.parse import urlparse
+
+from rich.console import Console
+
+from .downloader import Downloader
+from .parser import Parser, ParseResult, parse_external_css
+from .qr_interceptor import QRInterceptor
+from .react_interceptor import ReactInterceptor
+from .renderer import Renderer
+from .sanitizer import sanitize
+from .session_store import SessionStore
+from .storage import Storage
+from .utils import is_same_host, normalize_crawl_url, url_to_local_page_path
+
+console = Console()
+
+
+class SiteCrawler:
+    """全站递归抓取协调器"""
+
+    def __init__(
+        self,
+        start_url: str,
+        storage: Storage,
+        renderer: Renderer,
+        concurrency: int = 20,
+        timeout: int = 30,
+        delay: float = 0.1,
+        max_pages: int = 5000,
+        keep_js: bool = False,
+        verbose: bool = False,
+        enable_qr_intercept: bool = True,
+        enable_react_intercept: bool = True,
+        auth_mode: str = "manual-pause",
+        session_cache: bool = True,
+        session_file: str | None = None,
+        headful_auth: bool = True,
+    ):
+        self.start_url = normalize_crawl_url(start_url, start_url) or start_url
+        self.storage = storage
+        self.renderer = renderer
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.delay = delay
+        self.max_pages = max_pages
+        self.keep_js = keep_js
+        self.verbose = verbose
+        self.enable_qr_intercept = enable_qr_intercept
+        self.enable_react_intercept = enable_react_intercept
+        self.auth_mode = auth_mode
+        self.session_cache = session_cache
+        self.session_file = session_file
+        self.headful_auth = headful_auth
+
+        self.start_host = urlparse(self.start_url).netloc
+        self.session_store = SessionStore()
+
+        self.queue: deque[str] = deque([self.start_url])
+        self.queued: set[str] = {self.start_url}
+        self.visited: set[str] = set()
+        self.failed: dict[str, str] = {}
+        self.url_to_local_page: dict[str, str] = {
+            self.start_url: url_to_local_page_path(self.start_url, self.start_host)
+        }
+        self.auth_pauses = 0
+
+        self.storage_state: dict | None = None
+        self.downloader = Downloader(
+            concurrency=self.concurrency,
+            timeout=self.timeout,
+            delay=self.delay,
+            referer=self.start_url,
+        )
+
+    async def run(self) -> Path:
+        """执行站点递归抓取"""
+        console.print(
+            f"[bold yellow]━━━ 站点递归抓取模式（同 host: {self.start_host}） ━━━[/]"
+        )
+        self.storage_state = self._load_storage_state()
+
+        while self.queue and len(self.visited) < self.max_pages:
+            current_url = self.queue.popleft()
+            self.queued.discard(current_url)
+
+            if current_url in self.visited:
+                continue
+            if not is_same_host(current_url, self.start_host):
+                continue
+
+            if current_url not in self.url_to_local_page:
+                self.url_to_local_page[current_url] = url_to_local_page_path(
+                    current_url, self.start_host
+                )
+
+            current_local_path = self.url_to_local_page[current_url]
+            console.print(
+                f"\n[bold cyan]🌐 页面 {len(self.visited)+1}/{self.max_pages}: {current_url}[/]"
+            )
+
+            try:
+                render_result = await self.renderer.render(
+                    current_url,
+                    storage_state=self.storage_state,
+                    headless=True,
+                )
+
+                # 登录墙处理
+                if render_result.is_login_page:
+                    action = await self._handle_auth(current_url, render_result)
+                    if action == "skip":
+                        self.failed[current_url] = "登录墙，已按策略跳过"
+                        self.visited.add(current_url)
+                        continue
+                    if action == "retry":
+                        render_result = await self.renderer.render(
+                            current_url,
+                            storage_state=self.storage_state,
+                            headless=True,
+                        )
+                        if render_result.is_login_page:
+                            self.failed[current_url] = "登录后仍处于登录页"
+                            self.visited.add(current_url)
+                            continue
+
+                # 净化与兼容层注入
+                qr_bridge_script = ""
+                if render_result.qr_data and self.enable_qr_intercept:
+                    parsed = urlparse(render_result.final_url or current_url)
+                    original_domain = f"{parsed.scheme}://{parsed.netloc}"
+                    qr_bridge_script = QRInterceptor().generate_qr_bridge_script(
+                        original_domain
+                    )
+
+                menu_script = ""
+                if render_result.menu_css and self.enable_react_intercept:
+                    menu_script = ReactInterceptor().generate_menu_preservation_script()
+
+                clean_html = sanitize(
+                    render_result.html,
+                    original_url=render_result.final_url or current_url,
+                    keep_js=self.keep_js,
+                    qr_bridge_script=qr_bridge_script,
+                    menu_script=menu_script,
+                )
+
+                # 解析与重写
+                base_url = render_result.final_url or current_url
+                parser = Parser(base_url=base_url, intercepted_urls=render_result.resource_urls)
+                parse_result = parser.parse(
+                    clean_html,
+                    current_page_local_path=current_local_path,
+                )
+
+                # 下载资源（去重计数在 downloader 中累计）
+                self.downloader.cookies = render_result.cookies
+                self.downloader.referer = base_url
+                self.downloader.response_cache = render_result.response_cache
+                download_results = await self.downloader.download_all(
+                    parse_result.resource_map, Path(self.storage.output_dir)
+                )
+
+                # CSS 深度解析
+                await self._deep_parse_css(parse_result, base_url)
+
+                # 修复去重后的路径差异并保存页面
+                final_html = self._fix_dedup_paths(
+                    parse_result.html,
+                    download_results,
+                    parse_result.resource_map,
+                )
+                self.storage.save_html(final_html, filename=current_local_path)
+
+                # 入队新页面链接
+                discovered_links = set(parse_result.page_links) | set(render_result.page_links)
+                for link in discovered_links:
+                    normalized = normalize_crawl_url(link, base_url)
+                    if not normalized or not is_same_host(normalized, self.start_host):
+                        continue
+                    if normalized in self.visited or normalized in self.queued:
+                        continue
+
+                    self.url_to_local_page.setdefault(
+                        normalized,
+                        url_to_local_page_path(normalized, self.start_host),
+                    )
+                    self.queue.append(normalized)
+                    self.queued.add(normalized)
+
+                self.visited.add(current_url)
+                if self.verbose:
+                    console.print(
+                        f"[dim]  ↳ 页面链接: +{len(discovered_links)} | 队列: {len(self.queue)}[/]"
+                    )
+
+            except Exception as e:
+                self.failed[current_url] = str(e)
+                self.visited.add(current_url)
+                console.print(f"[red]  ✗ 页面抓取失败: {e}[/]")
+
+        report = self._build_report()
+        self.storage.save_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            "crawl_report.json",
+        )
+        console.print("[green]  ✓ 已生成 crawl_report.json[/]")
+        self.storage.print_tree()
+        return self.storage.get_output_path()
+
+    async def _handle_auth(self, current_url: str, render_result) -> str:
+        """处理登录墙，返回 skip/retry"""
+        if self.auth_mode == "skip":
+            console.print("[yellow]  ⚠ 检测到登录墙，按 --auth-mode=skip 跳过[/]")
+            return "skip"
+
+        if self.auth_mode == "import-session":
+            console.print("[yellow]  ⚠ 已导入会话但仍需登录，按策略跳过[/]")
+            return "skip"
+
+        # manual-pause
+        if not self.headful_auth:
+            console.print("[yellow]  ⚠ 未启用 headful 认证，无法人工登录，已跳过[/]")
+            return "skip"
+
+        self.auth_pauses += 1
+        console.print(
+            "[bold yellow]⏸ 检测到登录墙，已暂停抓取。请在弹出的浏览器中完成登录。[/]"
+        )
+        self.storage_state = await self.renderer.manual_auth(
+            current_url,
+            storage_state=self.storage_state,
+            prompt="登录/扫码完成后按回车继续...",
+        )
+
+        if self.session_cache and self.storage_state:
+            self._save_storage_state(self.storage_state)
+
+        # 二次检查：若当前渲染已明确 401/403，提示并重试一次
+        if render_result.status_code in (401, 403):
+            console.print("[dim]  ↳ 已完成人工认证，正在重新验证页面访问...[/]")
+        return "retry"
+
+    def _load_storage_state(self) -> dict | None:
+        """加载会话状态（import-session 或 encrypted cache）"""
+        if self.auth_mode == "import-session":
+            if not self.session_file:
+                console.print("[yellow]⚠ --auth-mode=import-session 但未提供 --session-file[/]")
+                return None
+            try:
+                data = json.loads(Path(self.session_file).read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    console.print(f"[dim]📥 已导入会话文件: {self.session_file}[/]")
+                    return data
+            except Exception as e:
+                console.print(f"[yellow]⚠ 导入会话失败: {e}[/]")
+            return None
+
+        if not self.session_cache:
+            return None
+
+        state = self.session_store.load(self.start_host, custom_path=self.session_file)
+        if state:
+            console.print("[dim]📥 已加载加密会话缓存[/]")
+        return state
+
+    def _save_storage_state(self, state: dict) -> None:
+        """保存会话状态（加密缓存）"""
+        self.session_store.save(self.start_host, state, custom_path=self.session_file)
+
+    async def _deep_parse_css(self, parse_result: ParseResult, base_url: str) -> None:
+        """
+        深度解析已下载的 CSS 文件，提取并下载其中的子资源（字体、图片等）
+        """
+        base_domain = urlparse(base_url).netloc
+        css_urls = set(parse_result.css_sub_resources.keys())
+        processed_css = set()
+        iteration = 0
+        max_iterations = 5
+
+        while css_urls - processed_css and iteration < max_iterations:
+            iteration += 1
+            new_css_urls = set()
+
+            for css_url in css_urls - processed_css:
+                processed_css.add(css_url)
+                local_path = parse_result.resource_map.get(css_url) or parse_result.css_sub_resources.get(css_url)
+                if not local_path:
+                    continue
+
+                css_file = Path(self.storage.output_dir) / local_path
+                if not css_file.exists():
+                    continue
+
+                try:
+                    css_text = css_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                rewritten_css, new_resources, sub_css = parse_external_css(
+                    css_text, css_url, parse_result.resource_map, base_domain
+                )
+
+                if new_resources:
+                    if self.verbose:
+                        console.print(
+                            f"[dim]  🔗 CSS 子资源: {css_url} → {len(new_resources)} 个新资源[/]"
+                        )
+                    await self.downloader.download_all(
+                        new_resources, Path(self.storage.output_dir)
+                    )
+
+                self.storage.save_text(rewritten_css, local_path)
+                new_css_urls |= sub_css
+
+            css_urls = new_css_urls
+
+    def _fix_dedup_paths(
+        self,
+        html: str,
+        download_results: dict,
+        resource_map: dict[str, str],
+    ) -> str:
+        """修复去重导致的路径变化"""
+        for url, result in download_results.items():
+            if result.success and result.local_path != resource_map.get(url):
+                old = f"./{resource_map.get(url, '')}"
+                new = f"./{result.local_path}"
+                if old and new and old != new:
+                    html = html.replace(old, new)
+        return html
+
+    def _build_report(self) -> dict:
+        return {
+            "start_url": self.start_url,
+            "host": self.start_host,
+            "pages_crawled": len(self.visited),
+            "pages_failed": len(self.failed),
+            "failed_urls": self.failed,
+            "queued_remaining": len(self.queue),
+            "max_pages": self.max_pages,
+            "auth_mode": self.auth_mode,
+            "auth_pauses": self.auth_pauses,
+            "session_cache": self.session_cache,
+            "resource_stats": {
+                "downloaded": self.downloader.total_downloaded,
+                "deduplicated": self.downloader.total_skipped,
+                "failed": self.downloader.total_failed,
+                "bytes": self.downloader.total_bytes,
+            },
+        }
+

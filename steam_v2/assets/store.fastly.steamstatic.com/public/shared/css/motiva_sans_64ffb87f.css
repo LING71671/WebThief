@@ -1,0 +1,65 @@
+
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Regular_50be8e3b.ttf') format("truetype");
+	font-weight: normal;
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Light_50be8e3b.ttf') format("truetype");
+	font-weight: 300; 
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Thin_50be8e3b.ttf') format("truetype");
+	font-weight: 200; 
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Medium_50be8e3b.ttf') format("truetype");
+	font-weight: 500; 
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Bold_50be8e3b.ttf') format("truetype");
+	font-weight: bold;
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-RegularItalic_50be8e3b.ttf') format("truetype");
+	font-weight: normal;
+	font-style: italic;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-LightItalic_50be8e3b.ttf') format("truetype");
+	font-weight: 300; 
+	font-style: italic;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-BoldItalic_50be8e3b.ttf') format("truetype");
+	font-weight: bold;
+	font-style: italic;
+}
+
+@font-face {
+	font-family: "Motiva Sans";
+	src: url('./assets/store.fastly.steamstatic.com/public/shared/fonts/MotivaSans-Black_50be8e3b.ttf') format("truetype");
+	font-weight: 900; 
+	font-style: normal;
+}
+
