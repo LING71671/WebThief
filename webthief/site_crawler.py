@@ -96,120 +96,25 @@ class SiteCrawler:
             current_url = self.queue.popleft()
             self.queued.discard(current_url)
 
-            if current_url in self.visited:
-                continue
-            if not is_same_host(current_url, self.start_host):
+            if self._skip_page(current_url):
                 continue
 
-            if current_url not in self.url_to_local_page:
-                self.url_to_local_page[current_url] = url_to_local_page_path(
-                    current_url, self.start_host
-                )
-
-            current_local_path = self.url_to_local_page[current_url]
-            console.print(
-                f"\n[bold cyan]🌐 页面 {len(self.visited)+1}/{self.max_pages}: {current_url}[/]"
-            )
+            current_local_path = self._ensure_local_page_path(current_url)
+            self._print_page_header(current_url)
 
             try:
-                render_result = await self.renderer.render(
-                    current_url,
-                    storage_state=self.storage_state,
-                    headless=True,
-                )
-
-                # 登录墙处理
-                if render_result.is_login_page:
-                    action = await self._handle_auth(current_url, render_result)
-                    if action == "skip":
-                        self.failed[current_url] = "登录墙，已按策略跳过"
-                        self.visited.add(current_url)
-                        continue
-                    if action == "retry":
-                        render_result = await self.renderer.render(
-                            current_url,
-                            storage_state=self.storage_state,
-                            headless=True,
-                        )
-                        if render_result.is_login_page:
-                            self.failed[current_url] = "登录后仍处于登录页"
-                            self.visited.add(current_url)
-                            continue
-
-                # 净化与兼容层注入
-                qr_bridge_script = ""
-                if render_result.qr_data and self.enable_qr_intercept:
-                    parsed = urlparse(render_result.final_url or current_url)
-                    original_domain = f"{parsed.scheme}://{parsed.netloc}"
-                    qr_bridge_script = QRInterceptor().generate_qr_bridge_script(
-                        original_domain
-                    )
-
-                menu_script = ""
-                if render_result.menu_css and self.enable_react_intercept:
-                    menu_script = ReactInterceptor().generate_menu_preservation_script()
-
-                clean_html = sanitize(
-                    render_result.html,
-                    original_url=render_result.final_url or current_url,
-                    keep_js=self.keep_js,
-                    qr_bridge_script=qr_bridge_script,
-                    menu_script=menu_script,
-                )
-
-                # 解析与重写
-                base_url = render_result.final_url or current_url
-                parser = Parser(base_url=base_url, intercepted_urls=render_result.resource_urls)
-                parse_result = parser.parse(
-                    clean_html,
-                    current_page_local_path=current_local_path,
-                )
-
-                # 下载资源（去重计数在 downloader 中累计）
-                self.downloader.cookies = render_result.cookies
-                self.downloader.referer = base_url
-                self.downloader.response_cache = render_result.response_cache
-                download_results = await self.downloader.download_all(
-                    parse_result.resource_map, Path(self.storage.output_dir)
-                )
-
-                # CSS 深度解析
-                await self._deep_parse_css(parse_result, base_url)
-
-                # 修复去重后的路径差异并保存页面
-                final_html = self._fix_dedup_paths(
-                    parse_result.html,
-                    download_results,
-                    parse_result.resource_map,
-                )
-                self.storage.save_html(final_html, filename=current_local_path)
-
-                # 入队新页面链接
-                discovered_links = set(parse_result.page_links) | set(render_result.page_links)
-                for link in discovered_links:
-                    normalized = normalize_crawl_url(link, base_url)
-                    if not normalized or not is_same_host(normalized, self.start_host):
-                        continue
-                    if normalized in self.visited or normalized in self.queued:
-                        continue
-
-                    self.url_to_local_page.setdefault(
-                        normalized,
-                        url_to_local_page_path(normalized, self.start_host),
-                    )
-                    self.queue.append(normalized)
-                    self.queued.add(normalized)
-
-                self.visited.add(current_url)
-                if self.verbose:
+                status, info = await self._process_page(current_url, current_local_path)
+                if status == "skip":
+                    self.failed[current_url] = info
+                elif self.verbose:
                     console.print(
-                        f"[dim]  ↳ 页面链接: +{len(discovered_links)} | 队列: {len(self.queue)}[/]"
+                        f"[dim]  ↳ 页面链接: +{info} | 队列: {len(self.queue)}[/]"
                     )
-
             except Exception as e:
                 self.failed[current_url] = str(e)
-                self.visited.add(current_url)
                 console.print(f"[red]  ✗ 页面抓取失败: {e}[/]")
+            finally:
+                self.visited.add(current_url)
 
         report = self._build_report()
         self.storage.save_text(
@@ -219,6 +124,157 @@ class SiteCrawler:
         console.print("[green]  ✓ 已生成 crawl_report.json[/]")
         self.storage.print_tree()
         return self.storage.get_output_path()
+
+    def _skip_page(self, url: str) -> bool:
+        """判断 URL 是否应在当前轮次跳过"""
+        if url in self.visited:
+            return True
+        if not is_same_host(url, self.start_host):
+            return True
+        return False
+
+    def _ensure_local_page_path(self, url: str) -> str:
+        """确保 URL 已映射本地 HTML 路径"""
+        return self.url_to_local_page.setdefault(
+            url,
+            url_to_local_page_path(url, self.start_host),
+        )
+
+    def _print_page_header(self, current_url: str) -> None:
+        console.print(
+            f"\n[bold cyan]🌐 页面 {len(self.visited)+1}/{self.max_pages}: {current_url}[/]"
+        )
+
+    async def _process_page(
+        self,
+        current_url: str,
+        current_local_path: str,
+    ) -> tuple[str, str | int]:
+        """处理单个页面并返回 (status, info)"""
+        render_result, skip_reason = await self._render_with_auth(current_url)
+        if not render_result:
+            return "skip", skip_reason or "登录墙，已按策略跳过"
+
+        base_url = render_result.final_url or current_url
+        clean_html = self._sanitize_rendered_html(current_url, render_result)
+        parse_result = self._parse_page(
+            clean_html=clean_html,
+            base_url=base_url,
+            current_local_path=current_local_path,
+            intercepted_urls=render_result.resource_urls,
+        )
+
+        download_results = await self._download_page_resources(
+            parse_result=parse_result,
+            render_result=render_result,
+            base_url=base_url,
+        )
+        await self._deep_parse_css(parse_result, base_url)
+
+        final_html = self._fix_dedup_paths(
+            parse_result.html,
+            download_results,
+            parse_result.resource_map,
+        )
+        self.storage.save_html(final_html, filename=current_local_path)
+
+        discovered_links = set(parse_result.page_links) | set(render_result.page_links)
+        self._enqueue_links(discovered_links, base_url)
+        return "ok", len(discovered_links)
+
+    async def _render_with_auth(self, current_url: str):
+        """渲染页面并处理登录墙策略"""
+        render_result = await self.renderer.render(
+            current_url,
+            storage_state=self.storage_state,
+            headless=True,
+        )
+        if not render_result.is_login_page:
+            return render_result, ""
+
+        action = await self._handle_auth(current_url, render_result)
+        if action == "skip":
+            return None, "登录墙，已按策略跳过"
+
+        render_result = await self.renderer.render(
+            current_url,
+            storage_state=self.storage_state,
+            headless=True,
+        )
+        if render_result.is_login_page:
+            return None, "登录后仍处于登录页"
+        return render_result, ""
+
+    def _sanitize_rendered_html(self, current_url: str, render_result) -> str:
+        """净化 HTML 并注入兼容脚本"""
+        qr_bridge_script, menu_script = self._build_injected_scripts(
+            current_url=current_url,
+            render_result=render_result,
+        )
+        return sanitize(
+            render_result.html,
+            original_url=render_result.final_url or current_url,
+            keep_js=self.keep_js,
+            qr_bridge_script=qr_bridge_script,
+            menu_script=menu_script,
+        )
+
+    def _build_injected_scripts(self, current_url: str, render_result) -> tuple[str, str]:
+        """根据渲染结果构造可选注入脚本"""
+        qr_bridge_script = ""
+        if render_result.qr_data and self.enable_qr_intercept:
+            parsed = urlparse(render_result.final_url or current_url)
+            original_domain = f"{parsed.scheme}://{parsed.netloc}"
+            qr_bridge_script = QRInterceptor().generate_qr_bridge_script(original_domain)
+
+        menu_script = ""
+        if render_result.menu_css and self.enable_react_intercept:
+            menu_script = ReactInterceptor().generate_menu_preservation_script()
+        return qr_bridge_script, menu_script
+
+    def _parse_page(
+        self,
+        clean_html: str,
+        base_url: str,
+        current_local_path: str,
+        intercepted_urls: set[str],
+    ) -> ParseResult:
+        parser = Parser(base_url=base_url, intercepted_urls=intercepted_urls)
+        return parser.parse(
+            clean_html,
+            current_page_local_path=current_local_path,
+        )
+
+    async def _download_page_resources(
+        self,
+        parse_result: ParseResult,
+        render_result,
+        base_url: str,
+    ) -> dict:
+        """下载页面及其主资源"""
+        self.downloader.cookies = render_result.cookies
+        self.downloader.referer = base_url
+        self.downloader.response_cache = render_result.response_cache
+        return await self.downloader.download_all(
+            parse_result.resource_map,
+            Path(self.storage.output_dir),
+        )
+
+    def _enqueue_links(self, discovered_links: set[str], base_url: str) -> None:
+        """将页面发现的新链接加入 BFS 队列"""
+        for link in discovered_links:
+            normalized = normalize_crawl_url(link, base_url)
+            if not normalized or not is_same_host(normalized, self.start_host):
+                continue
+            if normalized in self.visited or normalized in self.queued:
+                continue
+
+            self.url_to_local_page.setdefault(
+                normalized,
+                url_to_local_page_path(normalized, self.start_host),
+            )
+            self.queue.append(normalized)
+            self.queued.add(normalized)
 
     async def _handle_auth(self, current_url: str, render_result) -> str:
         """处理登录墙，返回 skip/retry"""
@@ -361,4 +417,3 @@ class SiteCrawler:
                 "bytes": self.downloader.total_bytes,
             },
         }
-

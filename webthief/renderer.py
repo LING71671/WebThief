@@ -148,241 +148,274 @@ class Renderer:
                     "--disable-site-isolation-trials",
                 ],
             )
-
-            context_kwargs = dict(
-                user_agent=self.user_agent,
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-                java_script_enabled=not self.disable_js,
-                ignore_https_errors=True,
-                service_workers="block",
-            )
-            if storage_state:
-                context_kwargs["storage_state"] = storage_state
-
-            context = await browser.new_context(**context_kwargs)
-            await context.add_init_script(STEALTH_JS)
-
-            page = await context.new_page()
-
-            # ── 注入高级拦截器（可选） ──
-            qr_interceptor = None
-            if self.enable_qr_intercept and not self.disable_js:
-                qr_interceptor = QRInterceptor()
-                await qr_interceptor.inject_qr_proxy(page)
-
-            react_interceptor = None
-            if self.enable_react_intercept and not self.disable_js:
-                react_interceptor = ReactInterceptor()
-                await react_interceptor.inject_react_unmount_patch(page)
-
-            # ── 网络拦截 ──
-            intercepted = set()
-            response_cache: dict[str, bytes] = {}
-
-            def on_request(request: Request) -> None:
-                req_url = request.url
-                if should_skip_url(req_url):
-                    return
-                parsed = urlparse(req_url)
-                if parsed.netloc in TRACKER_DOMAINS:
-                    return
-                normalized = normalize_url(req_url, url)
-                if normalized:
-                    intercepted.add(normalized)
-
-            async def on_response(response: Response) -> None:
-                try:
-                    resp_url = response.url
-                    if should_skip_url(resp_url):
-                        return
-                    content_type = response.headers.get("content-type", "")
-                    if not any(content_type.startswith(m) for m in CACHEABLE_MIMES):
-                        return
-                    if not (200 <= response.status < 300):
-                        return
-                    body = await response.body()
-                    if body and len(body) < 50 * 1024 * 1024:
-                        normalized = normalize_url(resp_url, url)
-                        if normalized:
-                            response_cache[normalized] = body
-                except Exception:
-                    pass
-
-            page.on("request", on_request)
-            page.on("response", on_response)
-
-            # ── 导航 ──
-            console.print(f"[bold cyan]🌐 正在加载: {url}[/]")
-            goto_response = None
             try:
-                goto_response = await page.goto(url, wait_until="networkidle", timeout=60000)
-            except Exception as e:
-                console.print(f"[yellow]  ⚠ 导航警告: {e}[/]")
+                context = await browser.new_context(
+                    **self._build_context_kwargs(storage_state)
+                )
+                await context.add_init_script(STEALTH_JS)
+                page = await context.new_page()
 
-            result.status_code = goto_response.status if goto_response else None
-            result.final_url = page.url
+                qr_interceptor, react_interceptor = await self._setup_interceptors(page)
+                intercepted, response_cache = self._attach_network_hooks(page, url)
 
-            await asyncio.sleep(self.wait_after_load)
-            if self.extra_wait > 0:
-                await asyncio.sleep(self.extra_wait)
+                await self._navigate(page, url, result)
+                await self._wait_after_navigation()
 
-            # ── 深度滚动 ──
-            if not self.disable_js:
-                try:
-                    scroll_delay_ms = int(self.scroll_pause * 1000)
-                    await page.evaluate(SCROLL_SCRIPT % scroll_delay_ms)
-                    await page.wait_for_load_state("networkidle", timeout=15000)
-                except Exception:
-                    pass
+                if not self.disable_js:
+                    await self._run_scroll_preload(page)
+                    await self._run_hover_preload(page)
 
-            # ── 悬停预加载 ──
-            if not self.disable_js:
-                try:
-                    await page.evaluate(
-                        """
-                        async () => {
-                            const selectors = ['.supernav > a', '.nav-item', '.dropdown-toggle', 'nav a', 'header a'];
-                            for (const sel of selectors) {
-                                const els = document.querySelectorAll(sel);
-                                for (const el of els) {
-                                    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
-                                    await new Promise(r => setTimeout(r, 100));
-                                }
-                            }
-                        }
-                        """
+                if react_interceptor:
+                    await react_interceptor.trigger_all_menus(page)
+                    await react_interceptor.freeze_menu_states(page)
+                    result.menu_css = await react_interceptor.convert_js_interactions_to_css(
+                        page
                     )
-                except Exception:
-                    pass
 
-            # ── React 菜单触发与冻结 ──
-            if react_interceptor:
-                await react_interceptor.trigger_all_menus(page)
-                await react_interceptor.freeze_menu_states(page)
-                result.menu_css = await react_interceptor.convert_js_interactions_to_css(page)
+                await self._solidify_css(page)
+                await self._freeze_canvas(page)
 
-            # ── 样式固化 ──
+                if qr_interceptor:
+                    result.qr_data = await qr_interceptor.capture_qr_lifecycle(page)
+                    result.preserved_scripts = await qr_interceptor.preserve_qr_scripts(page)
+
+                has_login_dom = await self._detect_login_dom(page)
+                result.is_login_page = self.is_login_like(
+                    result.final_url, result.status_code, has_login_dom
+                )
+
+                result.html = await self._extract_dom_snapshot(page)
+                intercepted |= await self._collect_dom_urls(page, result.final_url)
+
+                result.page_links = await self._extract_page_links(page, result.final_url)
+                result.cookies = await context.cookies()
+                result.resource_urls = intercepted
+                result.response_cache = response_cache
+            finally:
+                await browser.close()
+
+        return result
+
+    def _build_context_kwargs(self, storage_state: dict | None) -> dict:
+        context_kwargs = dict(
+            user_agent=self.user_agent,
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
+            java_script_enabled=not self.disable_js,
+            ignore_https_errors=True,
+            service_workers="block",
+        )
+        if storage_state:
+            context_kwargs["storage_state"] = storage_state
+        return context_kwargs
+
+    async def _setup_interceptors(
+        self, page: Page
+    ) -> tuple[QRInterceptor | None, ReactInterceptor | None]:
+        qr_interceptor = None
+        if self.enable_qr_intercept and not self.disable_js:
+            qr_interceptor = QRInterceptor()
+            await qr_interceptor.inject_qr_proxy(page)
+
+        react_interceptor = None
+        if self.enable_react_intercept and not self.disable_js:
+            react_interceptor = ReactInterceptor()
+            await react_interceptor.inject_react_unmount_patch(page)
+        return qr_interceptor, react_interceptor
+
+    def _attach_network_hooks(
+        self,
+        page: Page,
+        base_url: str,
+    ) -> tuple[set[str], dict[str, bytes]]:
+        intercepted: set[str] = set()
+        response_cache: dict[str, bytes] = {}
+
+        def on_request(request: Request) -> None:
+            req_url = request.url
+            if should_skip_url(req_url):
+                return
+            parsed = urlparse(req_url)
+            if parsed.netloc in TRACKER_DOMAINS:
+                return
+            normalized = normalize_url(req_url, base_url)
+            if normalized:
+                intercepted.add(normalized)
+
+        async def on_response(response: Response) -> None:
             try:
+                resp_url = response.url
+                if should_skip_url(resp_url):
+                    return
+                content_type = response.headers.get("content-type", "")
+                if not any(content_type.startswith(m) for m in CACHEABLE_MIMES):
+                    return
+                if not (200 <= response.status < 300):
+                    return
+                body = await response.body()
+                if body and len(body) < 50 * 1024 * 1024:
+                    normalized = normalize_url(resp_url, base_url)
+                    if normalized:
+                        response_cache[normalized] = body
+            except Exception:
+                pass
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+        return intercepted, response_cache
+
+    async def _navigate(self, page: Page, url: str, result: RenderResult) -> None:
+        """导航并记录最终 URL / 状态码"""
+        console.print(f"[bold cyan]🌐 正在加载: {url}[/]")
+        goto_response = None
+        try:
+            goto_response = await page.goto(url, wait_until="networkidle", timeout=60000)
+        except Exception as e:
+            console.print(f"[yellow]  ⚠ 导航警告: {e}[/]")
+
+        result.status_code = goto_response.status if goto_response else None
+        result.final_url = page.url
+
+    async def _wait_after_navigation(self) -> None:
+        await asyncio.sleep(self.wait_after_load)
+        if self.extra_wait > 0:
+            await asyncio.sleep(self.extra_wait)
+
+    async def _run_scroll_preload(self, page: Page) -> None:
+        try:
+            scroll_delay_ms = int(self.scroll_pause * 1000)
+            await page.evaluate(SCROLL_SCRIPT % scroll_delay_ms)
+            await page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+
+    async def _run_hover_preload(self, page: Page) -> None:
+        try:
+            await page.evaluate(
+                """
+                async () => {
+                    const selectors = ['.supernav > a', '.nav-item', '.dropdown-toggle', 'nav a', 'header a'];
+                    for (const sel of selectors) {
+                        const els = document.querySelectorAll(sel);
+                        for (const el of els) {
+                            el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                    }
+                }
+                """
+            )
+        except Exception:
+            pass
+
+    async def _solidify_css(self, page: Page) -> None:
+        try:
+            await page.evaluate(
+                """
+                () => {
+                    const rootStyles = getComputedStyle(document.documentElement);
+                    let cssVars = ':root {\\n';
+                    for (let i = 0; i < rootStyles.length; i++) {
+                        const prop = rootStyles[i];
+                        if (prop.startsWith('--')) {
+                            cssVars += `  ${prop}: ${rootStyles.getPropertyValue(prop)};\\n`;
+                        }
+                    }
+                    cssVars += '}';
+                    const style = document.createElement('style');
+                    style.textContent = cssVars;
+                    document.head.appendChild(style);
+
+                    document.querySelectorAll('*').forEach(el => {
+                        const bg = getComputedStyle(el).backgroundImage;
+                        if (bg && bg !== 'none' && !el.style.backgroundImage) {
+                            el.style.backgroundImage = bg;
+                        }
+                    });
+                }
+                """
+            )
+        except Exception:
+            pass
+
+    async def _freeze_canvas(self, page: Page) -> None:
+        try:
+            canvases = await page.query_selector_all("canvas")
+        except Exception:
+            return
+
+        for i, canvas in enumerate(canvases):
+            try:
+                box = await canvas.bounding_box()
+                if not (box and box["width"] > 5 and box["height"] > 5):
+                    continue
+                shot = await canvas.screenshot(type="png")
+                b64 = base64.b64encode(shot).decode("ascii")
                 await page.evaluate(
                     """
-                    () => {
-                        const rootStyles = getComputedStyle(document.documentElement);
-                        let cssVars = ':root {\\n';
-                        for (let i = 0; i < rootStyles.length; i++) {
-                            const prop = rootStyles[i];
-                            if (prop.startsWith('--')) {
-                                cssVars += `  ${prop}: ${rootStyles.getPropertyValue(prop)};\\n`;
-                            }
-                        }
-                        cssVars += '}';
-                        const style = document.createElement('style');
-                        style.textContent = cssVars;
-                        document.head.appendChild(style);
+                    (args) => {
+                        const c = document.querySelectorAll('canvas')[args.i];
+                        const img = document.createElement('img');
+                        img.src = 'data:image/png;base64,' + args.data;
+                        img.style.cssText = getComputedStyle(c).cssText;
+                        c.replaceWith(img);
+                    }
+                    """,
+                    {"i": i, "data": b64},
+                )
+            except Exception:
+                continue
 
-                        document.querySelectorAll('*').forEach(el => {
-                            const bg = getComputedStyle(el).backgroundImage;
-                            if (bg && bg !== 'none' && !el.style.backgroundImage) {
-                                el.style.backgroundImage = bg;
+    async def _extract_dom_snapshot(self, page: Page) -> str:
+        try:
+            return await page.evaluate(
+                """
+                () => {
+                    function expand(root) {
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) {
+                                const wrapper = document.createElement('div');
+                                wrapper.innerHTML = el.shadowRoot.innerHTML;
+                                el.appendChild(wrapper);
+                                expand(wrapper);
                             }
                         });
                     }
-                    """
-                )
-            except Exception:
-                pass
+                    expand(document);
 
-            # ── Canvas 冻结 ──
-            try:
-                canvases = await page.query_selector_all("canvas")
-                for i, canvas in enumerate(canvases):
-                    try:
-                        box = await canvas.bounding_box()
-                        if box and box["width"] > 5 and box["height"] > 5:
-                            shot = await canvas.screenshot(type="png")
-                            b64 = base64.b64encode(shot).decode("ascii")
-                            await page.evaluate(
-                                """
-                                (args) => {
-                                    const c = document.querySelectorAll('canvas')[args.i];
-                                    const img = document.createElement('img');
-                                    img.src = 'data:image/png;base64,' + args.data;
-                                    img.style.cssText = getComputedStyle(c).cssText;
-                                    c.replaceWith(img);
-                                }
-                                """,
-                                {"i": i, "data": b64},
-                            )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    const s = document.createElement('style');
+                    s.textContent = '*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }';
+                    document.head.appendChild(s);
 
-            # ── 捕获二维码数据 ──
-            if qr_interceptor:
-                result.qr_data = await qr_interceptor.capture_qr_lifecycle(page)
-                result.preserved_scripts = await qr_interceptor.preserve_qr_scripts(page)
-
-            # ── 登录页判定 ──
-            has_login_dom = await self._detect_login_dom(page)
-            result.is_login_page = self.is_login_like(
-                result.final_url, result.status_code, has_login_dom
+                    return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+                }
+                """
             )
+        except Exception:
+            return await page.content()
 
-            # ── 提取 DOM 快照 ──
-            try:
-                result.html = await page.evaluate(
-                    """
-                    () => {
-                        function expand(root) {
-                            root.querySelectorAll('*').forEach(el => {
-                                if (el.shadowRoot) {
-                                    const wrapper = document.createElement('div');
-                                    wrapper.innerHTML = el.shadowRoot.innerHTML;
-                                    el.appendChild(wrapper);
-                                    expand(wrapper);
-                                }
-                            });
-                        }
-                        expand(document);
+    async def _collect_dom_urls(self, page: Page, base_url: str) -> set[str]:
+        """从最终 DOM 收集 src/href 资源引用"""
+        collected: set[str] = set()
+        try:
+            urls = await page.evaluate(
+                """
+                () => Array.from(new Set([
+                    ...Array.from(document.querySelectorAll('[src]')).map(e => e.src),
+                    ...Array.from(document.querySelectorAll('link[href]')).map(e => e.href)
+                ]))
+                """
+            )
+        except Exception:
+            return collected
 
-                        const s = document.createElement('style');
-                        s.textContent = '*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }';
-                        document.head.appendChild(s);
-
-                        return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
-                    }
-                    """
-                )
-            except Exception:
-                result.html = await page.content()
-
-            # ── 提取额外资源与页面链接 ──
-            try:
-                urls = await page.evaluate(
-                    """
-                    () => Array.from(new Set([
-                        ...Array.from(document.querySelectorAll('[src]')).map(e => e.src),
-                        ...Array.from(document.querySelectorAll('link[href]')).map(e => e.href)
-                    ]))
-                    """
-                )
-                for u in urls:
-                    if u and not should_skip_url(u):
-                        norm = normalize_url(u, result.final_url)
-                        if norm:
-                            intercepted.add(norm)
-            except Exception:
-                pass
-
-            result.page_links = await self._extract_page_links(page, result.final_url)
-            result.cookies = await context.cookies()
-            result.resource_urls = intercepted
-            result.response_cache = response_cache
-
-            await browser.close()
-
-        return result
+        for raw_url in urls:
+            if not raw_url or should_skip_url(raw_url):
+                continue
+            normalized = normalize_url(raw_url, base_url)
+            if normalized:
+                collected.add(normalized)
+        return collected
 
     async def manual_auth(
         self,
@@ -482,4 +515,3 @@ class Renderer:
         except Exception:
             pass
         return links
-

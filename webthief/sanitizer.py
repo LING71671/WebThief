@@ -108,41 +108,49 @@ def _remove_trackers(soup: BeautifulSoup) -> None:
     3. 移除追踪用的 <img> 像素 (1x1)
     4. 移除 <noscript> 中的追踪内容
     """
-    for script in soup.find_all("script", src=True):
-        src = script["src"]
-        try:
-            parsed = urlparse(src)
-            if parsed.netloc in TRACKER_DOMAINS:
-                script.decompose()
-                continue
-        except Exception:
-            pass
+    _remove_tracker_scripts(soup)
+    _remove_tracker_images(soup)
+    _remove_tracker_noscript_blocks(soup)
 
+
+def _remove_tracker_scripts(soup: BeautifulSoup) -> None:
     for script in soup.find_all("script"):
-        if script.get("src"):
+        src = script.get("src", "")
+        if src and _is_tracker_domain_url(src):
+            script.decompose()
+            continue
+        if src:
             continue
         content = script.string or ""
-        if any(kw in content for kw in TRACKER_KEYWORDS):
+        if any(keyword in content for keyword in TRACKER_KEYWORDS):
             script.decompose()
 
+
+def _remove_tracker_images(soup: BeautifulSoup) -> None:
     for img in soup.find_all("img"):
         src = img.get("src", "")
-        try:
-            parsed = urlparse(src)
-            if parsed.netloc in TRACKER_DOMAINS:
-                img.decompose()
-                continue
-        except Exception:
-            pass
-        w = img.get("width", "")
-        h = img.get("height", "")
-        if w == "1" and h == "1":
+        if (src and _is_tracker_domain_url(src)) or _is_tracker_pixel(img):
             img.decompose()
 
+
+def _remove_tracker_noscript_blocks(soup: BeautifulSoup) -> None:
     for noscript in soup.find_all("noscript"):
         content = str(noscript)
         if any(domain in content for domain in TRACKER_DOMAINS):
             noscript.decompose()
+
+
+def _is_tracker_domain_url(url: str) -> bool:
+    try:
+        return urlparse(url).netloc in TRACKER_DOMAINS
+    except Exception:
+        return False
+
+
+def _is_tracker_pixel(img: Tag) -> bool:
+    width = str(img.get("width", "")).strip()
+    height = str(img.get("height", "")).strip()
+    return width == "1" and height == "1"
 
 
 def _remove_integrity_attrs(soup: BeautifulSoup) -> None:

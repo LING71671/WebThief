@@ -274,80 +274,92 @@ class Parser:
 
     def _rewrite_dom(self, soup: BeautifulSoup, current_page_local_path: str) -> None:
         """将 DOM 中的所有外部 URL 重写为本地相对路径"""
+        self._rewrite_tag_attrs(soup)
+        self._rewrite_src_attrs(soup)
+        self._rewrite_data_src_attrs(soup)
+        self._rewrite_srcset_attrs(soup)
+        self._rewrite_inline_style_attrs(soup)
+        self._rewrite_style_tags(soup)
+        self._rewrite_link_hrefs(soup)
+        self._rewrite_meta_contents(soup)
+        self._rewrite_page_links(soup, current_page_local_path)
 
-        # 构建 "原始 URL 碎片 → 本地路径" 的快速查找表
-        # 需要匹配绝对 URL 以及原始属性值
-        url_rewrite_map = {}
-        for abs_url, local_path in self.resource_map.items():
-            # 直接用绝对 URL
-            url_rewrite_map[abs_url] = f"./{local_path}"
+    def _local_asset_ref(self, raw_url: str) -> str | None:
+        """将资源 URL 转换为本地相对路径（不存在则返回 None）"""
+        absolute = normalize_url(raw_url, self.base_url)
+        if absolute in self.resource_map:
+            return f"./{self.resource_map[absolute]}"
+        return None
 
-        # ── 重写标准属性 ──
+    def _rewrite_tag_attrs(self, soup: BeautifulSoup) -> None:
+        """重写 RESOURCE_ATTRS 声明中的标签属性"""
         for tag_name, attr_name in self.RESOURCE_ATTRS:
             for tag in soup.find_all(tag_name):
                 val = tag.get(attr_name)
-                if val and isinstance(val, str):
-                    val = val.strip()
-                    absolute = normalize_url(val, self.base_url)
-                    if absolute in self.resource_map:
-                        tag[attr_name] = f"./{self.resource_map[absolute]}"
+                if not isinstance(val, str):
+                    continue
+                local_ref = self._local_asset_ref(val.strip())
+                if local_ref:
+                    tag[attr_name] = local_ref
 
-        # ── 通配符 src ──
+    def _rewrite_src_attrs(self, soup: BeautifulSoup) -> None:
+        """重写通用 src 属性"""
         for tag in soup.find_all(True, src=True):
-            src = tag.get("src", "").strip()
-            absolute = normalize_url(src, self.base_url)
-            if absolute in self.resource_map:
-                tag["src"] = f"./{self.resource_map[absolute]}"
+            src = (tag.get("src") or "").strip()
+            local_ref = self._local_asset_ref(src)
+            if local_ref:
+                tag["src"] = local_ref
 
-        # ── data-* src 属性 ──
+    def _rewrite_data_src_attrs(self, soup: BeautifulSoup) -> None:
+        """重写 data-* 中包含 src 的属性"""
         for tag in soup.find_all(True):
             for attr in list(tag.attrs.keys()):
-                if attr.startswith("data-") and "src" in attr.lower():
-                    val = tag.get(attr, "")
-                    if isinstance(val, str) and val.strip():
-                        absolute = normalize_url(val.strip(), self.base_url)
-                        if absolute in self.resource_map:
-                            tag[attr] = f"./{self.resource_map[absolute]}"
+                if not (attr.startswith("data-") and "src" in attr.lower()):
+                    continue
+                val = tag.get(attr, "")
+                if not isinstance(val, str):
+                    continue
+                local_ref = self._local_asset_ref(val.strip())
+                if local_ref:
+                    tag[attr] = local_ref
 
-        # ── 重写 srcset ──
-        for tag in soup.find_all(True, attrs={"srcset": True}):
-            srcset = tag.get("srcset", "")
-            if isinstance(srcset, str):
-                tag["srcset"] = self._rewrite_srcset(srcset)
+    def _rewrite_srcset_attrs(self, soup: BeautifulSoup) -> None:
+        """重写 srcset / data-srcset"""
+        for attr_name in ("srcset", "data-srcset"):
+            for tag in soup.find_all(True, attrs={attr_name: True}):
+                srcset = tag.get(attr_name, "")
+                if isinstance(srcset, str):
+                    tag[attr_name] = self._rewrite_srcset(srcset)
 
-        for tag in soup.find_all(True, attrs={"data-srcset": True}):
-            srcset = tag.get("data-srcset", "")
-            if isinstance(srcset, str):
-                tag["data-srcset"] = self._rewrite_srcset(srcset)
-
-        # ── 重写内联 style 中的 url() ──
+    def _rewrite_inline_style_attrs(self, soup: BeautifulSoup) -> None:
+        """重写 style 属性中的 url()"""
         for tag in soup.find_all(True, style=True):
             style_val = tag.get("style", "")
             if isinstance(style_val, str) and "url(" in style_val:
                 tag["style"] = self._rewrite_css_urls(style_val)
 
-        # ── 重写 <style> 标签 ──
+    def _rewrite_style_tags(self, soup: BeautifulSoup) -> None:
+        """重写 <style> 文本中的 url()"""
         for style_tag in soup.find_all("style"):
             css_text = style_tag.string
             if css_text and "url(" in css_text:
                 style_tag.string = self._rewrite_css_urls(css_text)
 
-        # ── 重写 link href (stylesheet, icon) ──
+    def _rewrite_link_hrefs(self, soup: BeautifulSoup) -> None:
+        """重写 link[href]"""
         for link in soup.find_all("link", href=True):
-            href = link.get("href", "").strip()
-            absolute = normalize_url(href, self.base_url)
-            if absolute in self.resource_map:
-                link["href"] = f"./{self.resource_map[absolute]}"
+            href = (link.get("href") or "").strip()
+            local_ref = self._local_asset_ref(href)
+            if local_ref:
+                link["href"] = local_ref
 
-        # ── 重写 meta content (og:image 等) ──
+    def _rewrite_meta_contents(self, soup: BeautifulSoup) -> None:
+        """重写 meta[content] 中的资源 URL"""
         for meta in soup.find_all("meta", content=True):
-            content = meta.get("content", "").strip()
-            absolute = normalize_url(content, self.base_url)
-            if absolute in self.resource_map:
-                meta["content"] = f"./{self.resource_map[absolute]}"
-
-        # ── 重写页面链接 ──
-        self._rewrite_page_links(soup, current_page_local_path)
+            content = (meta.get("content") or "").strip()
+            local_ref = self._local_asset_ref(content)
+            if local_ref:
+                meta["content"] = local_ref
 
     def _rewrite_page_links(self, soup: BeautifulSoup, current_page_local_path: str) -> None:
         """将同 host 页面链接重写为本地相对路径"""
@@ -422,48 +434,27 @@ class Parser:
     def _scan_component_values(self, values, urls: list[str]) -> None:
         """扫描 CSS 组件值列表，提取 url() 函数"""
         for val in values:
-            if val.type == "url":
-                # tinycss2 的 url token
-                url = val.value.strip()
-                if url and not should_skip_url(url):
-                    urls.append(url)
+            extracted = self._extract_css_url_token_value(val, allow_string=False)
+            if extracted and not should_skip_url(extracted):
+                urls.append(extracted)
+                continue
 
-            elif val.type == "function" and val.lower_name == "url":
-                # url() 函数式写法
-                inner = "".join(
-                    v.value if hasattr(v, "value") else v.serialize()
-                    for v in val.arguments
-                ).strip().strip("'\"")
-                if inner and not should_skip_url(inner):
-                    urls.append(inner)
-
-            elif hasattr(val, "content") and val.content:
+            if hasattr(val, "content") and val.content:
                 self._scan_component_values(val.content, urls)
-
             elif hasattr(val, "arguments") and val.arguments:
                 self._scan_component_values(val.arguments, urls)
 
     def _extract_import_url(self, node, urls: list[str]) -> None:
         """从 @import 规则中提取 URL"""
         for val in node.prelude:
-            if val.type == "url":
-                url = val.value.strip()
-                if url and not should_skip_url(url):
-                    urls.append(url)
-                    self.discovered_css_urls.add(normalize_url(url, self.base_url))
-            elif val.type == "string":
-                url = val.value.strip()
-                if url and not should_skip_url(url):
-                    urls.append(url)
-                    self.discovered_css_urls.add(normalize_url(url, self.base_url))
-            elif val.type == "function" and val.lower_name == "url":
-                inner = "".join(
-                    v.value if hasattr(v, "value") else v.serialize()
-                    for v in val.arguments
-                ).strip().strip("'\"")
-                if inner and not should_skip_url(inner):
-                    urls.append(inner)
-                    self.discovered_css_urls.add(normalize_url(inner, self.base_url))
+            extracted = self._extract_css_url_token_value(val, allow_string=True)
+            if not extracted or should_skip_url(extracted):
+                continue
+
+            urls.append(extracted)
+            normalized = normalize_url(extracted, self.base_url)
+            if normalized:
+                self.discovered_css_urls.add(normalized)
 
     def _extract_css_urls(self, css_text: str) -> list[str]:
         """
@@ -493,38 +484,76 @@ class Parser:
 
     def _rewrite_css_tokens(self, tokens) -> None:
         """递归重写 CSS token 中的 url()"""
-        for i, token in enumerate(tokens):
-            if token.type == "url":
-                url = token.value.strip()
-                absolute = normalize_url(url, self.base_url)
-                if absolute in self.resource_map:
-                    token.value = f"./{self.resource_map[absolute]}"
-                    token.representation = f"url(./{self.resource_map[absolute]})"
+        for token in tokens:
+            if self._rewrite_single_css_token(token):
+                continue
 
-            elif token.type == "function" and token.lower_name == "url":
-                if token.arguments:
-                    inner = "".join(
-                        v.value if hasattr(v, "value") else v.serialize()
-                        for v in token.arguments
-                    ).strip().strip("'\"")
-                    absolute = normalize_url(inner, self.base_url)
-                    if absolute in self.resource_map:
-                        local = f"./{self.resource_map[absolute]}"
-                        # 重建 arguments
-                        from tinycss2.ast import StringToken
-                        new_token = StringToken(
-                            token.arguments[0].source_line if token.arguments else 0,
-                            token.arguments[0].source_column if token.arguments else 0,
-                            local,
-                            f"'{local}'",
-                        )
-                        token.arguments[:] = [new_token]
-
-            elif hasattr(token, "content") and token.content:
+            if hasattr(token, "content") and token.content:
                 self._rewrite_css_tokens(token.content)
-
             elif hasattr(token, "arguments") and token.arguments:
                 self._rewrite_css_tokens(token.arguments)
+
+    @staticmethod
+    def _token_text(token) -> str:
+        return token.value if hasattr(token, "value") else token.serialize()
+
+    def _extract_css_url_token_value(self, token, allow_string: bool) -> str | None:
+        """从 CSS token 中提取 URL 文本"""
+        if token.type == "url":
+            return token.value.strip()
+
+        if allow_string and token.type == "string":
+            return token.value.strip()
+
+        if token.type == "function" and token.lower_name == "url":
+            return (
+                "".join(self._token_text(v) for v in token.arguments)
+                .strip()
+                .strip("'\"")
+            )
+
+        return None
+
+    def _rewrite_single_css_token(self, token) -> bool:
+        """重写单个 token，返回是否已处理"""
+        if token.type == "url":
+            url = token.value.strip()
+            absolute = normalize_url(url, self.base_url)
+            local_path = self.resource_map.get(absolute)
+            if local_path:
+                local_ref = f"./{local_path}"
+                token.value = local_ref
+                token.representation = f"url({local_ref})"
+            return True
+
+        if token.type == "function" and token.lower_name == "url":
+            self._rewrite_url_function_token(token)
+            return True
+
+        return False
+
+    def _rewrite_url_function_token(self, token) -> None:
+        if not token.arguments:
+            return
+
+        inner = "".join(self._token_text(v) for v in token.arguments).strip().strip("'\"")
+        absolute = normalize_url(inner, self.base_url)
+        local_path = self.resource_map.get(absolute)
+        if not local_path:
+            return
+
+        local = f"./{local_path}"
+        from tinycss2.ast import StringToken
+
+        first_arg = token.arguments[0]
+        token.arguments[:] = [
+            StringToken(
+                first_arg.source_line,
+                first_arg.source_column,
+                local,
+                f"'{local}'",
+            )
+        ]
 
 
 def parse_external_css(

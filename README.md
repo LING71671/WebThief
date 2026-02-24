@@ -1,120 +1,100 @@
-﻿# 🕷️ WebThief
+# WebThief
 
-> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+High-fidelity website cloning tool for modern JS-heavy pages (SPA/CSR), with offline-friendly output.
 
+高保真网站克隆工具，面向现代 JavaScript 动态页面（SPA/CSR），支持离线运行产物。
 
-> 高保真 1:1 网站克隆工具 — 完美还原依赖 JavaScript 动态渲染的现代 SPA 网页
+## Overview | 项目简介
 
-## ✨ 核心特性
+- EN: WebThief renders pages in Chromium (Playwright), captures runtime resources, rewrites paths, and outputs a runnable local mirror.
+- 中文：WebThief 通过 Playwright Chromium 渲染页面，捕获运行时资源并重写路径，输出可运行的本地镜像站点。
 
-- **无头浏览器渲染** — Playwright Chromium 引擎，完美处理 SPA / CSR 页面
-- **深度懒加载触发** — 自动滚动页面触发所有 `IntersectionObserver` 和异步请求
-- **反检测** — Stealth 脚本绕过 WebDriver 检测，UA 随机伪装
-- **AST 级解析** — tinycss2 CSS 语法树解析，BeautifulSoup DOM 遍历，**零正则**
-- **智能净化** — 自动移除 CSP / Service Worker / 追踪器 / SRI 校验
-- **高并发下载** — asyncio + aiohttp，SHA256 哈希去重，指数退避重试
-- **离线可用** — 克隆后的站点可在 `file://` 协议或本地服务器上完美运行
-- **全站递归抓取** — 同 host BFS 队列抓取所有层级页面（可设置页面上限）
-- **人工登录暂停** — 遇登录墙自动暂停，完成扫码/登录后继续抓取
-- **会话加密缓存** — 认证状态加密保存，二次运行自动复用
-- **🔐 实时二维码克隆** — 拦截二维码 API，保留刷新逻辑，实现"活的"二维码（NEW v3.0）
-- **⚛️ 完全体交互菜单** — React 组件拦截，保留所有下拉菜单和交互元素（NEW v3.0）
+## Features | 核心特性
 
-## 📦 安装
+- EN: Playwright-based rendering for SPA/CSR pages
+- 中文：基于 Playwright 的页面渲染，适配 SPA/CSR
+- EN: Deep lazy-load triggering (scroll + interaction preloading)
+- 中文：深度懒加载触发（滚动 + 交互预加载）
+- EN: AST-level parsing/rewrite for HTML/CSS (BeautifulSoup + tinycss2)
+- 中文：HTML/CSS AST 级解析与重写（BeautifulSoup + tinycss2）
+- EN: Resource downloader with concurrency, retry, and SHA256 dedup
+- 中文：高并发下载、重试与 SHA256 去重
+- EN: Optional login pause with encrypted session cache
+- 中文：可选登录暂停与加密会话缓存
+- EN: Optional QR/menu intercept capabilities for advanced dynamic pages
+- 中文：可选二维码/菜单拦截能力，适配复杂动态页面
+
+## Install | 安装
 
 ```bash
-# 克隆仓库
 git clone https://github.com/LING71671/WebThief.git
 cd WebThief
-
-# 安装依赖
 pip install -e .
-
-# 安装 Playwright 浏览器
 playwright install chromium
 ```
 
-## 🚀 使用
+## Quick Start | 快速开始
 
 ```bash
-# 基本用法
-webthief https://example.com
-
-# 全站递归（默认开启）
-webthief https://example.com --crawl-site --max-pages 800
-
-# 仅抓单页（兼容旧行为）
+# Single page | 单页抓取
 webthief https://example.com --single-page
 
-# 指定输出目录
-webthief https://example.com -o ./my_clone
+# Site crawl (same host) | 同站点递归抓取
+webthief https://example.com --crawl-site --max-pages 800
 
-# 高并发 + 详细日志
-webthief https://example.com -c 30 -v
+# Verbose mode | 详细日志
+webthief https://example.com -v
 
-# 禁用 JS（纯静态抓取）
-webthief https://example.com --no-js
-
-# 自定义等待时间（适合慢速 SPA）
-webthief https://example.com --wait 10
-
-# 遇登录墙时暂停人工认证，并缓存会话
+# Manual auth pause + session cache | 人工登录暂停 + 会话缓存
 webthief https://example.com --auth-mode manual-pause --session-cache
-
-# 导入已有 Playwright storageState
-webthief https://example.com --auth-mode import-session --session-file ./state.json
 ```
 
-### 完整参数
+## CLI Options | 参数说明
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `URL` | 目标网页地址 | (必填) |
-| `-o, --output` | 输出目录 | `./webthief_output` |
-| `-c, --concurrency` | 并发下载数 | `20` |
-| `-t, --timeout` | 单文件超时 (秒) | `30` |
-| `--delay` | 请求间隔 (秒) | `0.1` |
-| `--no-js` | 禁用 JS 渲染 | `false` |
-| `--keep-js` | 保留 JS 执行能力 | `false` |
-| `--user-agent` | 自定义 UA | 随机 |
-| `--wait` | 额外等待 (秒) | `3` |
-| `--enable-qr-intercept` | 启用二维码拦截 | `true` |
-| `--enable-react-intercept` | 启用 React 拦截 | `true` |
-| `--crawl-site / --single-page` | 全站递归 / 单页抓取 | `--crawl-site` |
-| `--max-pages` | 递归抓取最大页面数 | `5000` |
-| `--auth-mode` | 登录页处理策略 (`manual-pause/import-session/skip`) | `manual-pause` |
-| `--session-cache / --no-session-cache` | 启用加密会话缓存 | `--session-cache` |
-| `--session-file` | 会话文件路径（导入或缓存路径） | `None` |
-| `--headful-auth / --no-headful-auth` | 手动认证时是否打开可视浏览器 | `--headful-auth` |
-| `-v, --verbose` | 详细日志 | `false` |
+| Option | Default | Description (EN / 中文) |
+|---|---:|---|
+| `URL` | required | Target URL / 目标地址 |
+| `-o, --output` | `./webthief_output` | Output directory / 输出目录 |
+| `-c, --concurrency` | `20` | Download concurrency / 下载并发数 |
+| `-t, --timeout` | `30` | File timeout (sec) / 单文件超时（秒） |
+| `--delay` | `0.1` | Request delay / 请求间隔 |
+| `--no-js` | `false` | Disable JS rendering / 禁用 JS 渲染 |
+| `--keep-js` | `false` | Keep JS runtime in output / 保留输出页 JS 执行能力 |
+| `--wait` | `3` | Extra wait after load / 页面加载后额外等待 |
+| `--enable-qr-intercept` | `true` | Enable QR interception / 启用二维码拦截 |
+| `--enable-react-intercept` | `true` | Enable React/menu interception / 启用 React 菜单拦截 |
+| `--crawl-site / --single-page` | `--crawl-site` | Site crawl or single page / 递归或单页 |
+| `--max-pages` | `5000` | Crawl page limit / 最大抓取页数 |
+| `--auth-mode` | `manual-pause` | `manual-pause/import-session/skip` |
+| `--session-cache` | `true` | Encrypted session cache / 加密会话缓存 |
+| `--session-file` | `None` | Session file path / 会话文件路径 |
+| `--headful-auth` | `true` | Visual browser for auth / 人工认证可视浏览器 |
+| `-v, --verbose` | `false` | Verbose logs / 详细日志 |
 
-### 高级功能示例
+## Architecture | 架构
 
-```bash
-# 克隆带实时二维码的登录页
-webthief https://example.com/login --enable-qr-intercept
-
-# 克隆带复杂菜单的 SPA 网站
-webthief https://example.com --enable-react-intercept
-
-# 同时启用所有高级功能
-webthief https://example.com --enable-qr-intercept --enable-react-intercept --wait 5
+```text
+Renderer (Playwright)
+  -> Sanitizer (CSP/SW/tracker cleanup)
+  -> Parser/Rewriter (AST)
+  -> Downloader (async + dedup)
+  -> Storage
 ```
 
-详细的高级功能使用指南请参考 [ADVANCED_FEATURES.md](./ADVANCED_FEATURES.md)
+## Docs | 文档
 
-## 🔒 合规说明
+- [ADVANCED_FEATURES.md](./ADVANCED_FEATURES.md)
+- [QUICKSTART_ADVANCED.md](./QUICKSTART_ADVANCED.md)
+- [CHANGELOG.md](./CHANGELOG.md)
+- [AI_CONTEXT.md](./AI_CONTEXT.md)
 
-- 仅应对你拥有或获得明确授权的站点执行全站抓取。
-- 默认递归范围限制为入口 URL 的同一 host，不跨域抓取。
+## Compliance | 合规说明
 
-## 🏗️ 架构
+- EN: Use only on websites you own or are explicitly authorized to test.
+- 中文：仅用于你拥有或明确授权的站点。
+- EN: Respect target website terms, robots rules, and applicable laws.
+- 中文：请遵守目标网站条款、robots 规则及适用法律。
 
-```
-渲染层 (Playwright) → 净化层 (CSP/SW清洗) → 解析重写层 (AST) → 下载引擎 (async) → 存储层
-```
+## License | 许可
 
-## ⚠️ 免责声明
-
-本工具仅供学习研究使用。请遵守目标网站的 `robots.txt` 和服务条款。
-
+MIT

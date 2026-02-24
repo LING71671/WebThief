@@ -10,9 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import aiohttp
 from rich.console import Console
@@ -175,111 +173,20 @@ class Downloader:
         result = DownloadResult(url, local_path)
 
         async with semaphore:
-            # 【改造四】缓存优先：检查渲染阶段是否已缓存此资源
-            if url in self.response_cache:
-                content = self.response_cache[url]
-                sha = compute_sha256(content)
-
-                if sha in self.hash_map:
-                    result.success = True
-                    result.local_path = self.hash_map[sha]
-                    result.sha256 = sha
-                    self.total_skipped += 1
-                else:
-                    file_path = output_dir / local_path
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                    file_path.write_bytes(content)
-                    self.hash_map[sha] = local_path
-                    result.success = True
-                    result.content = content
-                    result.sha256 = sha
-                    self.total_downloaded += 1
-                    self.total_bytes += len(content)
-
-                self.results[url] = result
-                progress.advance(task)
-                return
-
-            # 缓存未命中，走网络下载
-            for attempt in range(1, self.retries + 1):
-                try:
-                    headers = {
-                        "User-Agent": get_random_ua(),
-                        "Accept": "*/*",
-                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                        "Accept-Encoding": "gzip, deflate",
-                    }
-                    if self.referer:
-                        headers["Referer"] = self.referer
-
-                    async with session.get(url, headers=headers, allow_redirects=True) as resp:
-                        if resp.status == 200:
-                            content = await resp.read()
-                            content_type = resp.headers.get("Content-Type", "")
-
-                            # SHA256 去重
-                            sha = compute_sha256(content)
-                            if sha in self.hash_map:
-                                # 已经下载过相同内容
-                                result.success = True
-                                result.local_path = self.hash_map[sha]
-                                result.sha256 = sha
-                                result.content_type = content_type
-                                self.total_skipped += 1
-                                break
-
-                            # 检查并修复扩展名
-                            file_path = output_dir / local_path
-                            if not file_path.suffix:
-                                ext = guess_extension(content_type, url)
-                                if ext:
-                                    local_path += ext
-                                    file_path = output_dir / local_path
-                                    result.local_path = local_path
-
-                            # 保存文件
-                            file_path.parent.mkdir(parents=True, exist_ok=True)
-                            file_path.write_bytes(content)
-
-                            # 注册哈希
-                            self.hash_map[sha] = local_path
-
-                            result.success = True
-                            result.content = content
-                            result.content_type = content_type
-                            result.sha256 = sha
-                            self.total_downloaded += 1
-                            self.total_bytes += len(content)
-                            break
-
-                        elif resp.status in (301, 302, 307, 308):
-                            # 重定向已由 allow_redirects 处理
-                            pass
-                        elif resp.status == 404:
-                            result.error = f"HTTP 404 Not Found"
-                            self.total_failed += 1
-                            break
-                        else:
-                            result.error = f"HTTP {resp.status}"
-                            if attempt == self.retries:
-                                self.total_failed += 1
-
-                except asyncio.TimeoutError:
-                    result.error = "超时"
-                    if attempt == self.retries:
-                        self.total_failed += 1
-                except aiohttp.ClientError as e:
-                    result.error = str(e)
-                    if attempt == self.retries:
-                        self.total_failed += 1
-                except Exception as e:
-                    result.error = str(e)
-                    if attempt == self.retries:
-                        self.total_failed += 1
-
-                # 指数退避
-                if attempt < self.retries:
-                    await asyncio.sleep(self.delay * (2 ** (attempt - 1)))
+            handled_by_cache = self._try_use_cached_response(
+                url=url,
+                local_path=local_path,
+                output_dir=output_dir,
+                result=result,
+            )
+            if not handled_by_cache:
+                await self._download_with_retries(
+                    session=session,
+                    url=url,
+                    local_path=local_path,
+                    output_dir=output_dir,
+                    result=result,
+                )
 
             # 请求间微延迟（反检测）
             if self.delay > 0:
@@ -287,6 +194,190 @@ class Downloader:
 
         self.results[url] = result
         progress.advance(task)
+
+    def _try_use_cached_response(
+        self,
+        url: str,
+        local_path: str,
+        output_dir: Path,
+        result: DownloadResult,
+    ) -> bool:
+        """缓存命中则直接写入并返回 True"""
+        content = self.response_cache.get(url)
+        if content is None:
+            return False
+
+        sha = compute_sha256(content)
+        if self._apply_dedup_if_exists(result, sha):
+            return True
+
+        file_path = output_dir / local_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(content)
+
+        self.hash_map[sha] = local_path
+        result.success = True
+        result.content = content
+        result.sha256 = sha
+        self.total_downloaded += 1
+        self.total_bytes += len(content)
+        return True
+
+    async def _download_with_retries(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        local_path: str,
+        output_dir: Path,
+        result: DownloadResult,
+    ) -> None:
+        """按重试策略下载 URL"""
+        for attempt in range(1, self.retries + 1):
+            try:
+                done = await self._download_once(
+                    session=session,
+                    url=url,
+                    local_path=local_path,
+                    output_dir=output_dir,
+                    result=result,
+                    attempt=attempt,
+                )
+                if done:
+                    return
+            except asyncio.TimeoutError:
+                self._record_attempt_error(result, "超时", attempt)
+            except aiohttp.ClientError as e:
+                self._record_attempt_error(result, str(e), attempt)
+            except Exception as e:
+                self._record_attempt_error(result, str(e), attempt)
+
+            if attempt < self.retries:
+                await asyncio.sleep(self.delay * (2 ** (attempt - 1)))
+
+    async def _download_once(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        local_path: str,
+        output_dir: Path,
+        result: DownloadResult,
+        attempt: int,
+    ) -> bool:
+        """执行单次 HTTP 请求，返回是否结束重试"""
+        headers = self._build_headers()
+        async with session.get(url, headers=headers, allow_redirects=True) as resp:
+            if resp.status == 200:
+                content = await resp.read()
+                content_type = resp.headers.get("Content-Type", "")
+                self._save_downloaded_content(
+                    url=url,
+                    local_path=local_path,
+                    output_dir=output_dir,
+                    content=content,
+                    content_type=content_type,
+                    result=result,
+                )
+                return True
+
+            return self._handle_non_200_status(resp.status, result, attempt)
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {
+            "User-Agent": get_random_ua(),
+            "Accept": "*/*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+        }
+        if self.referer:
+            headers["Referer"] = self.referer
+        return headers
+
+    def _save_downloaded_content(
+        self,
+        url: str,
+        local_path: str,
+        output_dir: Path,
+        content: bytes,
+        content_type: str,
+        result: DownloadResult,
+    ) -> None:
+        sha = compute_sha256(content)
+        if self._apply_dedup_if_exists(result, sha, content_type):
+            return
+
+        final_local_path = local_path
+        file_path = output_dir / final_local_path
+        if not file_path.suffix:
+            ext = guess_extension(content_type, url)
+            if ext:
+                final_local_path = f"{local_path}{ext}"
+                file_path = output_dir / final_local_path
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(content)
+
+        self.hash_map[sha] = final_local_path
+        result.local_path = final_local_path
+        result.success = True
+        result.content = content
+        result.content_type = content_type
+        result.sha256 = sha
+        self.total_downloaded += 1
+        self.total_bytes += len(content)
+
+    def _apply_dedup_if_exists(
+        self,
+        result: DownloadResult,
+        sha: str,
+        content_type: str = "",
+    ) -> bool:
+        """若哈希已存在，复用本地路径并返回 True"""
+        local_path = self.hash_map.get(sha)
+        if not local_path:
+            return False
+
+        result.success = True
+        result.local_path = local_path
+        result.sha256 = sha
+        result.content_type = content_type
+        self.total_skipped += 1
+        return True
+
+    def _handle_non_200_status(
+        self,
+        status: int,
+        result: DownloadResult,
+        attempt: int,
+    ) -> bool:
+        """处理非 200 响应，返回是否结束重试"""
+        if status in (301, 302, 307, 308):
+            # allow_redirects=True 场景下通常不会落到这里，保留兼容
+            if attempt == self.retries:
+                result.error = f"HTTP {status}"
+                self.total_failed += 1
+                return True
+            return False
+
+        if status == 404:
+            result.error = "HTTP 404 Not Found"
+            self.total_failed += 1
+            return True
+
+        result.error = f"HTTP {status}"
+        if attempt == self.retries:
+            self.total_failed += 1
+            return True
+        return False
+
+    def _record_attempt_error(
+        self,
+        result: DownloadResult,
+        error: str,
+        attempt: int,
+    ) -> None:
+        result.error = error
+        if attempt == self.retries:
+            self.total_failed += 1
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
