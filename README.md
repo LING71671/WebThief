@@ -97,4 +97,4 @@ Renderer (Playwright)
 
 ## License | 许可
 
-MIT
+[GNU General Public License v3 (GPLv3)](./LICENSE)

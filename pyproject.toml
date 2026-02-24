@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "高保真 1:1 网站克隆工具 — 完美还原 SPA 动态页面，支持离线运行"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-only"}
 authors = [
     {name = "LING71671"}
 ]
