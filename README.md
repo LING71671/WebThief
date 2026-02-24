@@ -1,4 +1,7 @@
-# 🕷️ WebThief
+﻿# 🕷️ WebThief
+
+> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+
 
 > 高保真 1:1 网站克隆工具 — 完美还原依赖 JavaScript 动态渲染的现代 SPA 网页
 
@@ -114,3 +117,4 @@ webthief https://example.com --enable-qr-intercept --enable-react-intercept --wa
 ## ⚠️ 免责声明
 
 本工具仅供学习研究使用。请遵守目标网站的 `robots.txt` 和服务条款。
+

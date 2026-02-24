@@ -1,4 +1,7 @@
-# WebThief v3.0 实现总结
+﻿# WebThief v3.0 实现总结
+
+> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+
 
 ## 🎯 实现目标
 
@@ -34,8 +37,8 @@
 
 ### 示例
 
-6. **`examples/test_advanced_features.py`** (测试脚本)
-   - 三个测试场景：二维码、React、组合
+6. **测试脚本**（已从仓库移除）
+   - 建议直接通过 CLI 命令进行功能验证
 
 ---
 
@@ -177,11 +180,11 @@ webthief https://store.steampowered.com/login/ \
   -v
 ```
 
-### 使用测试脚本
+### 命令行验证
 
 ```bash
-cd examples
-python test_advanced_features.py
+# 直接通过 CLI 验证，无需额外测试脚本
+webthief https://store.steampowered.com/login/ --enable-qr-intercept --enable-react-intercept -v
 ```
 
 ### 验证清单
@@ -314,7 +317,7 @@ const menuSelectors = [
 ### 新增代码
 - `qr_interceptor.py`: ~350 行
 - `react_interceptor.py`: ~280 行
-- 测试脚本: ~150 行
+- 验证命令示例: 3 组
 - 文档: ~1500 行
 
 ### 修改代码
@@ -354,7 +357,7 @@ const menuSelectors = [
 - [x] 实现总结 (本文件)
 - [x] 更新 README.md
 - [x] 更新 CHANGELOG.md
-- [x] 测试示例
+- [x] CLI 验证示例
 
 ---
 
@@ -373,3 +376,6 @@ WebThief v3.0 成功实现了 ROADMAP 中的两大核心目标，将网页克隆
 **实现者**: Kiro AI Assistant  
 **完成时间**: 2026-02-24  
 **版本**: v3.0.0
+
+
+

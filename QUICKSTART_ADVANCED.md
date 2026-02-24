@@ -1,4 +1,7 @@
-# WebThief 高级功能快速开始
+﻿# WebThief 高级功能快速开始
+
+> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+
 
 ## 🎯 5 分钟上手指南
 
@@ -235,7 +238,7 @@ const menuSelectors = [
 ## 📚 下一步
 
 - 阅读 [ADVANCED_FEATURES.md](./ADVANCED_FEATURES.md) 了解详细技术细节
-- 查看 [examples/test_advanced_features.py](./examples/test_advanced_features.py) 运行测试
+- 使用 `webthief URL -v` 直接验证高级功能日志输出
 - 参考 [ROADMAP.md](./ROADMAP.md) 了解未来计划
 
 ---
@@ -250,3 +253,5 @@ const menuSelectors = [
 ---
 
 **祝你克隆愉快！** 🎉
+
+

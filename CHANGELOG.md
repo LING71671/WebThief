@@ -1,4 +1,20 @@
-# WebThief 版本日志 (CHANGELOG)
+﻿# WebThief 版本日志 (CHANGELOG)
+
+> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+
+## v3.0.1 (2026-02-24) - 文档与仓库清理
+
+### 🧹 仓库清理
+- 移除测试脚本：`test_demo.py`、`test_steam.py`、`test_steam_login.py`、`test_unit.py`
+- 移除测试目录：`tests/`、`qq_official_test/`
+- 移除示例测试脚本：`examples/test_advanced_features.py`
+
+### 📝 文档更新
+- 全量 Markdown 文档增加维护更新标记
+- 清理已删除测试脚本的文档引用
+- 更新 AI 上下文与路线图到 v3.0 状态
+
+---
 
 ## v3.0.0 (2026-02-24) - 动态交互还原版 (Dynamic Interaction Restoration)
 
@@ -105,3 +121,5 @@
 - 支持完整资源嗅探与下载。
 - 实现目录结构还原。
 - 基础 CSS 图片路径分析。
+
+
