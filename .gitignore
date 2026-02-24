@@ -9,3 +9,4 @@ test_output/
 build/
 dist/
 *.egg-info/
+steam_v2/
