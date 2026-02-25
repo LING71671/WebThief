@@ -16,11 +16,11 @@ from urllib.parse import urlparse
 from rich.console import Console
 
 from .downloader import Downloader
-from .parser import Parser, ParseResult, parse_external_css
+from .parser import Parser, ParseResult, parse_external_css, parse_external_js_assets
 from .qr_interceptor import QRInterceptor
 from .react_interceptor import ReactInterceptor
 from .renderer import Renderer
-from .sanitizer import sanitize
+from .sanitizer import sanitize, inject_runtime_resource_map
 from .session_store import SessionStore
 from .storage import Storage
 from .utils import is_same_host, normalize_crawl_url, url_to_local_page_path
@@ -169,12 +169,21 @@ class SiteCrawler:
             render_result=render_result,
             base_url=base_url,
         )
+        self._sync_resource_map_with_download_results(
+            parse_result.resource_map, download_results
+        )
         await self._deep_parse_css(parse_result, base_url)
+        await self._deep_parse_js(parse_result, base_url)
 
         final_html = self._fix_dedup_paths(
             parse_result.html,
             download_results,
             parse_result.resource_map,
+        )
+        final_html = inject_runtime_resource_map(
+            final_html,
+            original_url=base_url,
+            resource_map=parse_result.resource_map,
         )
         self.storage.save_html(final_html, filename=current_local_path)
 
@@ -239,11 +248,16 @@ class SiteCrawler:
         current_local_path: str,
         intercepted_urls: set[str],
     ) -> ParseResult:
-        parser = Parser(base_url=base_url, intercepted_urls=intercepted_urls)
-        return parser.parse(
+        parser = Parser(
+            base_url=base_url,
+            intercepted_urls=intercepted_urls,
+            page_link_mode="local",
+        )
+        parse_result = parser.parse(
             clean_html,
             current_page_local_path=current_local_path,
         )
+        return parse_result
 
     async def _download_page_resources(
         self,
@@ -365,8 +379,12 @@ class SiteCrawler:
                 except Exception:
                     continue
 
-                rewritten_css, new_resources, sub_css = parse_external_css(
-                    css_text, css_url, parse_result.resource_map, base_domain
+                _, new_resources, sub_css = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
                 )
 
                 if new_resources:
@@ -374,14 +392,80 @@ class SiteCrawler:
                         console.print(
                             f"[dim]  🔗 CSS 子资源: {css_url} → {len(new_resources)} 个新资源[/]"
                         )
-                    await self.downloader.download_all(
+                    css_download_results = await self.downloader.download_all(
                         new_resources, Path(self.storage.output_dir)
                     )
+                    self._sync_resource_map_with_download_results(
+                        parse_result.resource_map, css_download_results
+                    )
+
+                rewritten_css, _, _ = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
+                )
 
                 self.storage.save_text(rewritten_css, local_path)
                 new_css_urls |= sub_css
 
             css_urls = new_css_urls
+
+    async def _deep_parse_js(self, parse_result: ParseResult, base_url: str) -> None:
+        """
+        深度解析已下载 JS 文件，补抓硬编码静态资源（图片/字体/媒体）。
+        """
+        base_domain = urlparse(base_url).netloc
+        pending_js_urls = {
+            url
+            for url, local_path in parse_result.resource_map.items()
+            if isinstance(local_path, str) and local_path.lower().endswith(".js")
+        }
+        processed_js_urls = set()
+
+        while pending_js_urls - processed_js_urls:
+            current_batch = list(pending_js_urls - processed_js_urls)
+            for js_url in current_batch:
+                processed_js_urls.add(js_url)
+                local_path = parse_result.resource_map.get(js_url)
+                if not local_path:
+                    continue
+
+                js_file = Path(self.storage.output_dir) / local_path
+                if not js_file.exists():
+                    continue
+
+                try:
+                    js_text = js_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                new_resources = parse_external_js_assets(
+                    js_text,
+                    js_url,
+                    parse_result.resource_map,
+                    base_domain,
+                )
+                if not new_resources:
+                    continue
+
+                if self.verbose:
+                    console.print(
+                        f"[dim]  🔗 JS 子资源: {js_url} → {len(new_resources)} 个新资源[/]"
+                    )
+                js_download_results = await self.downloader.download_all(
+                    new_resources, Path(self.storage.output_dir)
+                )
+                self._sync_resource_map_with_download_results(
+                    parse_result.resource_map, js_download_results
+                )
+
+            pending_js_urls = {
+                url
+                for url, local_path in parse_result.resource_map.items()
+                if isinstance(local_path, str) and local_path.lower().endswith(".js")
+            }
 
     def _fix_dedup_paths(
         self,
@@ -417,3 +501,15 @@ class SiteCrawler:
                 "bytes": self.downloader.total_bytes,
             },
         }
+
+    @staticmethod
+    def _sync_resource_map_with_download_results(
+        resource_map: dict[str, str],
+        download_results: dict,
+    ) -> None:
+        """将下载去重后的真实落盘路径回写到资源映射表"""
+        for url, result in download_results.items():
+            if getattr(result, "success", False) and getattr(result, "local_path", ""):
+                resource_map[url] = result.local_path
+            else:
+                resource_map.pop(url, None)

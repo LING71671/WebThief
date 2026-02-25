@@ -2,6 +2,22 @@
 
 > 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
 
+## v3.0.2 (2026-02-25) - 文档精简与忽略规则整理
+
+### 📝 文档结构调整
+- 保留核心文档：`README.md`、`ADVANCED_FEATURES.md`、`CHANGELOG.md`
+- 将高级快速开始内容合并进 `ADVANCED_FEATURES.md`
+- 删除过时或重复文档：
+  - `AI_CONTEXT.md`
+  - `IMPLEMENTATION_SUMMARY.md`
+  - `QUICKSTART_ADVANCED.md`
+  - `ROADMAP.md`
+  - `TEST_RESULTS.md`
+  - `VISUAL_INSPECTION_GUIDE.md`
+
+### 🧹 仓库规则更新
+- 扩展 `.gitignore`，补充常见 Python/IDE/日志/本地克隆输出忽略项
+
 ## v3.0.1 (2026-02-24) - 文档与仓库清理
 
 ### 🧹 仓库清理

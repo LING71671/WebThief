@@ -92,6 +92,8 @@ class Renderer:
         disable_js: bool = False,
         enable_qr_intercept: bool = True,
         enable_react_intercept: bool = True,
+        freeze_animations: bool = True,
+        prepare_runtime_replay: bool = False,
     ):
         self.wait_after_load = wait_after_load
         self.scroll_pause = scroll_pause
@@ -100,6 +102,8 @@ class Renderer:
         self.disable_js = disable_js
         self.enable_qr_intercept = enable_qr_intercept
         self.enable_react_intercept = enable_react_intercept
+        self.freeze_animations = freeze_animations
+        self.prepare_runtime_replay = prepare_runtime_replay
 
     @staticmethod
     def is_login_like(url: str, status_code: int | None, has_login_dom: bool) -> bool:
@@ -165,6 +169,8 @@ class Renderer:
                     await self._run_scroll_preload(page)
                     await self._run_hover_preload(page)
 
+                await self._force_lazy_resource_activation(page)
+
                 if react_interceptor:
                     await react_interceptor.trigger_all_menus(page)
                     await react_interceptor.freeze_menu_states(page)
@@ -172,8 +178,12 @@ class Renderer:
                         page
                     )
 
+                if self.prepare_runtime_replay:
+                    await self._prepare_runtime_replay(page)
+
                 await self._solidify_css(page)
-                await self._freeze_canvas(page)
+                if not self.prepare_runtime_replay:
+                    await self._freeze_canvas(page)
 
                 if qr_interceptor:
                     result.qr_data = await qr_interceptor.capture_qr_lifecycle(page)
@@ -308,6 +318,107 @@ class Renderer:
         except Exception:
             pass
 
+    async def _force_lazy_resource_activation(self, page: Page) -> None:
+        """强制激活常见懒加载资源，确保快照包含真实图片/背景图"""
+        try:
+            await page.evaluate(
+                """
+                () => {
+                    const srcAttrs = [
+                        'data-src', 'data-original', 'data-lazy-src',
+                        'data-actualsrc', 'data-url'
+                    ];
+                    const srcsetAttrs = ['data-srcset', 'data-lazy-srcset'];
+                    const bgAttrs = ['data-bg', 'data-bg-src', 'data-background'];
+
+                    const isPlaceholder = (val) => {
+                        if (!val) return true;
+                        const s = String(val).trim().toLowerCase();
+                        if (!s) return true;
+                        if (s.startsWith('data:image')) return s.length < 256 || s.includes('r0lgodh');
+                        return ['placeholder', 'spacer', 'blank', 'loading', 'pixel'].some(k => s.includes(k));
+                    };
+
+                    document.querySelectorAll('img').forEach((img) => {
+                        for (const attr of srcAttrs) {
+                            const candidate = img.getAttribute(attr);
+                            if (!candidate) continue;
+                            if (isPlaceholder(img.getAttribute('src'))) {
+                                img.setAttribute('src', candidate);
+                            }
+                        }
+                        for (const attr of srcsetAttrs) {
+                            const candidate = img.getAttribute(attr);
+                            if (candidate && !img.getAttribute('srcset')) {
+                                img.setAttribute('srcset', candidate);
+                            }
+                        }
+                        if (img.getAttribute('loading') === 'lazy') {
+                            img.setAttribute('loading', 'eager');
+                        }
+                    });
+
+                    document.querySelectorAll('source').forEach((source) => {
+                        for (const attr of srcsetAttrs) {
+                            const candidate = source.getAttribute(attr);
+                            if (candidate) {
+                                source.setAttribute('srcset', candidate);
+                            }
+                        }
+                        for (const attr of srcAttrs) {
+                            const candidate = source.getAttribute(attr);
+                            if (candidate && !source.getAttribute('src')) {
+                                source.setAttribute('src', candidate);
+                            }
+                        }
+                    });
+
+                    document.querySelectorAll('*').forEach((el) => {
+                        for (const attr of bgAttrs) {
+                            const candidate = el.getAttribute(attr);
+                            if (!candidate) continue;
+                            if (!el.style.backgroundImage || el.style.backgroundImage === 'none') {
+                                el.style.backgroundImage = `url("${candidate}")`;
+                            }
+                        }
+                    });
+                }
+                """
+            )
+        except Exception:
+            pass
+
+    async def _prepare_runtime_replay(self, page: Page) -> None:
+        """
+        在保留 JS 的场景下，尽量回退已初始化组件，避免快照态阻断二次初始化。
+        典型场景：slick/swiper 在克隆页重新执行时因 "initialized" 状态失效。
+        """
+        try:
+            await page.evaluate(
+                """
+                () => {
+                    try {
+                        if (window.jQuery && window.jQuery.fn && window.jQuery.fn.slick) {
+                            window.jQuery('.slick-initialized').each(function() {
+                                try { window.jQuery(this).slick('unslick'); } catch (e) {}
+                            });
+                        }
+                    } catch (e) {}
+
+                    try {
+                        document.querySelectorAll('.swiper, .swiper-container').forEach((el) => {
+                            const inst = el.swiper || el.__swiper__ || null;
+                            if (inst && typeof inst.destroy === 'function') {
+                                try { inst.destroy(true, true); } catch (e) {}
+                            }
+                        });
+                    } catch (e) {}
+                }
+                """
+            )
+        except Exception:
+            pass
+
     async def _solidify_css(self, page: Page) -> None:
         try:
             await page.evaluate(
@@ -370,7 +481,7 @@ class Renderer:
         try:
             return await page.evaluate(
                 """
-                () => {
+                (freezeAnimations) => {
                     function expand(root) {
                         root.querySelectorAll('*').forEach(el => {
                             if (el.shadowRoot) {
@@ -383,13 +494,16 @@ class Renderer:
                     }
                     expand(document);
 
-                    const s = document.createElement('style');
-                    s.textContent = '*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }';
-                    document.head.appendChild(s);
+                    if (freezeAnimations) {
+                        const s = document.createElement('style');
+                        s.textContent = '*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }';
+                        document.head.appendChild(s);
+                    }
 
                     return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
                 }
-                """
+                """,
+                self.freeze_animations,
             )
         except Exception:
             return await page.content()

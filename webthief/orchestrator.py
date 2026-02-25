@@ -16,11 +16,11 @@ from rich.panel import Panel
 from rich.text import Text
 
 from .downloader import Downloader
-from .parser import ParseResult, Parser, parse_external_css
+from .parser import ParseResult, Parser, parse_external_css, parse_external_js_assets
 from .qr_interceptor import QRInterceptor
 from .react_interceptor import ReactInterceptor
 from .renderer import RenderResult, Renderer
-from .sanitizer import sanitize
+from .sanitizer import sanitize, inject_runtime_resource_map
 from .session_store import SessionStore
 from .site_crawler import SiteCrawler
 from .storage import Storage
@@ -94,6 +94,8 @@ class Orchestrator:
             disable_js=self.disable_js,
             enable_qr_intercept=self.enable_qr_intercept,
             enable_react_intercept=self.enable_react_intercept,
+            freeze_animations=not self.keep_js,
+            prepare_runtime_replay=self.keep_js,
         )
 
         if self.crawl_site:
@@ -141,7 +143,7 @@ class Orchestrator:
         if render_result.is_login_page:
             render_result = await self._handle_single_page_auth(renderer, render_result)
 
-        console.print("\n[bold yellow]━━━ 阶段 2/5: HTML 净化 + JS 中和 ━━━[/]")
+        console.print("\n[bold yellow]━━━ 阶段 2/5: HTML 净化 + JS 策略注入 ━━━[/]")
         clean_html = self._sanitize_html(render_result)
         console.print("[green]  ✓ HTML 净化 + 兼容层注入完成[/]")
 
@@ -150,6 +152,7 @@ class Orchestrator:
         parser = Parser(
             base_url=base_url,
             intercepted_urls=render_result.resource_urls,
+            page_link_mode="absolute",
         )
         parse_result = parser.parse(clean_html, current_page_local_path="index.html")
 
@@ -166,12 +169,21 @@ class Orchestrator:
             parse_result.resource_map,
             Path(self.output_dir),
         )
+        self._sync_resource_map_with_download_results(
+            parse_result.resource_map, download_results
+        )
 
         await self._deep_parse_css(parse_result, downloader, storage, base_url)
+        await self._deep_parse_js(parse_result, downloader, base_url)
 
         console.print("\n[bold yellow]━━━ 阶段 5/5: 镜像存储 ━━━[/]")
         final_html = self._fix_dedup_paths(
             parse_result.html, download_results, parse_result.resource_map
+        )
+        final_html = inject_runtime_resource_map(
+            final_html,
+            original_url=base_url,
+            resource_map=parse_result.resource_map,
         )
         storage.save_html(final_html, filename="index.html")
         storage.print_tree()
@@ -289,8 +301,12 @@ class Orchestrator:
                 except Exception:
                     continue
 
-                rewritten_css, new_resources, sub_css = parse_external_css(
-                    css_text, css_url, parse_result.resource_map, base_domain
+                _, new_resources, sub_css = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
                 )
 
                 if new_resources:
@@ -298,12 +314,97 @@ class Orchestrator:
                         console.print(
                             f"[dim]  🔗 CSS 子资源: {css_url} → {len(new_resources)} 个新资源[/]"
                         )
-                    await downloader.download_all(new_resources, Path(self.output_dir))
+                    css_download_results = await downloader.download_all(
+                        new_resources, Path(self.output_dir)
+                    )
+                    self._sync_resource_map_with_download_results(
+                        parse_result.resource_map, css_download_results
+                    )
+
+                rewritten_css, _, _ = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
+                )
 
                 storage.save_text(rewritten_css, local_path)
                 new_css_urls |= sub_css
 
             css_urls = new_css_urls
+
+    async def _deep_parse_js(
+        self,
+        parse_result: ParseResult,
+        downloader: Downloader,
+        base_url: str,
+    ) -> None:
+        """
+        深度解析已下载 JS 文件，补抓其中硬编码的静态资源（图片/字体/媒体）。
+        """
+        base_domain = urlparse(base_url).netloc
+        pending_js_urls = {
+            url
+            for url, local_path in parse_result.resource_map.items()
+            if isinstance(local_path, str) and local_path.lower().endswith(".js")
+        }
+        processed_js_urls = set()
+
+        while pending_js_urls - processed_js_urls:
+            current_batch = list(pending_js_urls - processed_js_urls)
+            for js_url in current_batch:
+                processed_js_urls.add(js_url)
+                local_path = parse_result.resource_map.get(js_url)
+                if not local_path:
+                    continue
+
+                js_file = Path(self.output_dir) / local_path
+                if not js_file.exists():
+                    continue
+
+                try:
+                    js_text = js_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                new_resources = parse_external_js_assets(
+                    js_text,
+                    js_url,
+                    parse_result.resource_map,
+                    base_domain,
+                )
+                if not new_resources:
+                    continue
+
+                if self.verbose:
+                    console.print(
+                        f"[dim]  🔗 JS 子资源: {js_url} → {len(new_resources)} 个新资源[/]"
+                    )
+                js_download_results = await downloader.download_all(
+                    new_resources, Path(self.output_dir)
+                )
+                self._sync_resource_map_with_download_results(
+                    parse_result.resource_map, js_download_results
+                )
+
+            pending_js_urls = {
+                url
+                for url, local_path in parse_result.resource_map.items()
+                if isinstance(local_path, str) and local_path.lower().endswith(".js")
+            }
+
+    @staticmethod
+    def _sync_resource_map_with_download_results(
+        resource_map: dict[str, str],
+        download_results: dict,
+    ) -> None:
+        """将下载去重后的真实落盘路径回写到资源映射表"""
+        for url, result in download_results.items():
+            if getattr(result, "success", False) and getattr(result, "local_path", ""):
+                resource_map[url] = result.local_path
+            else:
+                resource_map.pop(url, None)
 
     def _fix_dedup_paths(
         self,
@@ -369,4 +470,3 @@ class Orchestrator:
             padding=(0, 2),
         )
         console.print(panel)
-

@@ -55,10 +55,9 @@ console = Console()
     help="禁用 JavaScript 渲染 (仅抓静态 HTML)",
 )
 @click.option(
-    "--keep-js",
-    is_flag=True,
-    default=False,
-    help="保留 JS 执行能力 (默认中和所有 JS 防闪退)",
+    "--keep-js/--neutralize-js",
+    default=True,
+    help="保留 JS 执行能力（默认）/ 中和所有 JS 防止运行时异常",
 )
 @click.option(
     "--user-agent",

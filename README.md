@@ -42,6 +42,9 @@ webthief https://example.com --single-page
 # Site crawl (same host) | 同站点递归抓取
 webthief https://example.com --crawl-site --max-pages 800
 
+# Force static-safe output (disable runtime JS) | 强制静态安全输出
+webthief https://example.com --neutralize-js
+
 # Verbose mode | 详细日志
 webthief https://example.com -v
 
@@ -59,7 +62,7 @@ webthief https://example.com --auth-mode manual-pause --session-cache
 | `-t, --timeout` | `30` | File timeout (sec) / 单文件超时（秒） |
 | `--delay` | `0.1` | Request delay / 请求间隔 |
 | `--no-js` | `false` | Disable JS rendering / 禁用 JS 渲染 |
-| `--keep-js` | `false` | Keep JS runtime in output / 保留输出页 JS 执行能力 |
+| `--keep-js / --neutralize-js` | `--keep-js` | Keep JS runtime in output / 保留输出页 JS 执行能力（默认） |
 | `--wait` | `3` | Extra wait after load / 页面加载后额外等待 |
 | `--enable-qr-intercept` | `true` | Enable QR interception / 启用二维码拦截 |
 | `--enable-react-intercept` | `true` | Enable React/menu interception / 启用 React 菜单拦截 |
@@ -84,9 +87,7 @@ Renderer (Playwright)
 ## Docs | 文档
 
 - [ADVANCED_FEATURES.md](./ADVANCED_FEATURES.md)
-- [QUICKSTART_ADVANCED.md](./QUICKSTART_ADVANCED.md)
 - [CHANGELOG.md](./CHANGELOG.md)
-- [AI_CONTEXT.md](./AI_CONTEXT.md)
 
 ## Compliance | 合规说明
 

@@ -10,7 +10,8 @@
 - 【新增】剥离 SPA 框架启动脚本
 """
 
-from urllib.parse import urlparse
+import json
+from urllib.parse import urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Comment, Tag, NavigableString
 
@@ -21,6 +22,7 @@ from .config import (
     RUNTIME_SHIM_JS,
     SPA_HYDRATION_KEYWORDS,
 )
+from .utils import normalize_url, should_skip_url
 
 
 def sanitize(html: str, original_url: str = "", keep_js: bool = False, 
@@ -73,6 +75,27 @@ def sanitize(html: str, original_url: str = "", keep_js: bool = False,
     if menu_script:
         _inject_custom_script(soup, menu_script, "menu-preservation")
 
+    return str(soup)
+
+
+def inject_runtime_resource_map(
+    html: str,
+    original_url: str,
+    resource_map: dict[str, str],
+) -> str:
+    """
+    注入资源映射脚本，供运行时 fetch/XHR 使用本地镜像资源。
+
+    Args:
+        html: 已完成 sanitize + parse 的 HTML
+        original_url: 原始页面 URL
+        resource_map: 远程 URL -> 本地路径
+    """
+    if not resource_map:
+        return html
+
+    soup = BeautifulSoup(html, "lxml")
+    _inject_resource_map_script(soup, original_url, resource_map)
     return str(soup)
 
 
@@ -320,3 +343,103 @@ def _inject_custom_script(soup: BeautifulSoup, script_content: str, script_id: s
             new_head = soup.new_tag("head")
             new_head.append(script_tag)
             html_tag.insert(0, new_head)
+
+
+def _inject_resource_map_script(
+    soup: BeautifulSoup,
+    original_url: str,
+    resource_map: dict[str, str],
+) -> None:
+    """注入运行时资源映射（供 shim 的 fetch/XHR 代理使用）"""
+    if not resource_map:
+        return
+
+    normalized_map: dict[str, str] = {}
+    for raw_url, local_path in resource_map.items():
+        if not isinstance(raw_url, str) or not isinstance(local_path, str):
+            continue
+
+        absolute = normalize_url(raw_url, original_url)
+        if not absolute or should_skip_url(absolute):
+            continue
+
+        local_ref = f"./{local_path}"
+        normalized_map[absolute] = local_ref
+
+        # 兼容脚本里常见的相对路径写法（/img/a.png、img/a.png、./img/a.png）
+        parsed = urlparse(absolute)
+        path = parsed.path or "/"
+        if path:
+            normalized_map.setdefault(path, local_ref)
+            if path.startswith("/"):
+                rel_path = path.lstrip("/")
+                if rel_path:
+                    normalized_map.setdefault(rel_path, local_ref)
+                    normalized_map.setdefault(f"./{rel_path}", local_ref)
+
+        if parsed.query and path:
+            with_query = f"{path}?{parsed.query}"
+            normalized_map.setdefault(with_query, local_ref)
+            if with_query.startswith("/"):
+                rel_query = with_query.lstrip("/")
+                if rel_query:
+                    normalized_map.setdefault(rel_query, local_ref)
+                    normalized_map.setdefault(f"./{rel_query}", local_ref)
+
+        # 一些请求会省略 query，补一个无 query 的兜底键
+        if parsed.query:
+            without_query = urlunparse(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path or "/",
+                    parsed.params,
+                    "",
+                    "",
+                )
+            )
+            normalized_map.setdefault(without_query, local_ref)
+
+    if not normalized_map:
+        return
+
+    parsed_original = urlparse(original_url or "")
+    origin = (
+        f"{parsed_original.scheme}://{parsed_original.netloc}"
+        if parsed_original.scheme and parsed_original.netloc
+        else ""
+    )
+
+    script_content = (
+        "(function(){\n"
+        f"  window.__WEBTHIEF_ORIGIN__ = {json.dumps(origin, ensure_ascii=False)};\n"
+        "  var existing = window.__WEBTHIEF_RESOURCE_MAP__ || {};\n"
+        f"  var incoming = {json.dumps(normalized_map, ensure_ascii=False, separators=(',', ':'))};\n"
+        "  for (var k in incoming) { existing[k] = incoming[k]; }\n"
+        "  window.__WEBTHIEF_RESOURCE_MAP__ = existing;\n"
+        "})();"
+    )
+
+    script_tag = soup.new_tag(
+        "script",
+        attrs={"data-webthief": "resource-map"},
+    )
+    script_tag.string = script_content
+
+    head = soup.find("head")
+    if not head:
+        html_tag = soup.find("html")
+        if not html_tag:
+            return
+        head = soup.new_tag("head")
+        html_tag.insert(0, head)
+
+    old_map = head.find("script", attrs={"data-webthief": "resource-map"})
+    if old_map:
+        old_map.decompose()
+
+    shim = head.find("script", attrs={"data-webthief": "shim"})
+    if shim:
+        shim.insert_after(script_tag)
+    else:
+        head.insert(0, script_tag)

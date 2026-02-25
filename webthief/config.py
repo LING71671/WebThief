@@ -317,17 +317,235 @@ RUNTIME_SHIM_JS = """
         return true;
     }, true);
 
-    // ── 5. 拦截 fetch / XMLHttpRequest 对原站的请求 ──
-    // 在离线环境下，对外部的网络请求必然失败，静默处理
-    var _origFetch = window.fetch;
-    window.fetch = function() {
-        var url = arguments[0];
-        if (typeof url === 'string' && (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)) {
-            console.warn('[WebThief Shim] 已拦截外部 fetch:', url);
-            return Promise.resolve(new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}}));
+    // ── 5. fetch / XHR 本地镜像资源代理 ──
+    // 优先将请求映射到本地已下载资源，减少离线 CORS 与空白数据块
+    function toAbsoluteRequestUrl(input) {
+        try {
+            if (typeof input === 'string') {
+                return new URL(input, ORIGINAL_ORIGIN).href;
+            }
+            if (typeof Request !== 'undefined' && input instanceof Request) {
+                return new URL(input.url, ORIGINAL_ORIGIN).href;
+            }
+            if (input && input.url) {
+                return new URL(input.url, ORIGINAL_ORIGIN).href;
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    function resolveMappedResource(input) {
+        try {
+            var resourceMap = window.__WEBTHIEF_RESOURCE_MAP__ || {};
+            var direct = '';
+            if (typeof input === 'string') {
+                direct = input.trim();
+            } else if (input && typeof input.url === 'string') {
+                direct = input.url.trim();
+            }
+
+            if (direct && resourceMap[direct]) return resourceMap[direct];
+            if (direct) {
+                var directNoHash = direct.split('#')[0];
+                if (resourceMap[directNoHash]) return resourceMap[directNoHash];
+            }
+
+            var absolute = toAbsoluteRequestUrl(input);
+            if (!absolute) return '';
+            if (resourceMap[absolute]) return resourceMap[absolute];
+
+            var withoutHash = absolute.split('#')[0];
+            if (resourceMap[withoutHash]) return resourceMap[withoutHash];
+            return '';
+        } catch (e) {
+            return '';
         }
-        return _origFetch.apply(this, arguments);
+    }
+
+    function remapSrcsetValue(srcset) {
+        if (!srcset || typeof srcset !== 'string') return srcset;
+        var parts = srcset.split(',');
+        for (var i = 0; i < parts.length; i++) {
+            var entry = parts[i].trim();
+            if (!entry) continue;
+            var tokens = entry.split(/\\s+/);
+            if (!tokens.length) continue;
+            var mapped = resolveMappedResource(tokens[0]);
+            if (mapped) {
+                tokens[0] = mapped;
+                parts[i] = tokens.join(' ');
+            }
+        }
+        return parts.join(', ');
+    }
+
+    function remapUrlForDom(url) {
+        if (!url || typeof url !== 'string') return url;
+        var mapped = resolveMappedResource(url);
+        return mapped || url;
+    }
+
+    function patchUrlSetter(prototypeObj, propName, isSrcset) {
+        try {
+            if (!prototypeObj) return;
+            var desc = Object.getOwnPropertyDescriptor(prototypeObj, propName);
+            if (!desc || typeof desc.set !== 'function') return;
+            Object.defineProperty(prototypeObj, propName, {
+                configurable: true,
+                enumerable: desc.enumerable,
+                get: function() {
+                    if (typeof desc.get === 'function') {
+                        return desc.get.call(this);
+                    }
+                    return undefined;
+                },
+                set: function(value) {
+                    var nextValue = isSrcset ? remapSrcsetValue(value) : remapUrlForDom(value);
+                    return desc.set.call(this, nextValue);
+                }
+            });
+        } catch (e) {}
+    }
+
+    patchUrlSetter(window.HTMLImageElement && window.HTMLImageElement.prototype, 'src', false);
+    patchUrlSetter(window.HTMLScriptElement && window.HTMLScriptElement.prototype, 'src', false);
+    patchUrlSetter(window.HTMLLinkElement && window.HTMLLinkElement.prototype, 'href', false);
+    patchUrlSetter(window.HTMLSourceElement && window.HTMLSourceElement.prototype, 'src', false);
+    patchUrlSetter(window.HTMLSourceElement && window.HTMLSourceElement.prototype, 'srcset', true);
+    patchUrlSetter(window.HTMLVideoElement && window.HTMLVideoElement.prototype, 'src', false);
+    patchUrlSetter(window.HTMLVideoElement && window.HTMLVideoElement.prototype, 'poster', false);
+    patchUrlSetter(window.HTMLAudioElement && window.HTMLAudioElement.prototype, 'src', false);
+
+    var _origSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        try {
+            var attr = String(name || '').toLowerCase();
+            if (typeof value === 'string') {
+                if (attr === 'src' || attr === 'poster' || attr === 'data-src' || attr === 'data-original' || attr === 'data-bg' || attr === 'data-background') {
+                    value = remapUrlForDom(value);
+                } else if (attr === 'srcset') {
+                    value = remapSrcsetValue(value);
+                } else if (attr === 'href') {
+                    var tagName = (this.tagName || '').toLowerCase();
+                    if (tagName === 'link') {
+                        value = remapUrlForDom(value);
+                    }
+                }
+            }
+        } catch (e) {}
+        return _origSetAttribute.call(this, name, value);
     };
+
+    function remapExistingDomUrls() {
+        try {
+            var selectors = [
+                'img[src]', 'img[data-src]', 'img[data-original]',
+                'script[src]', 'link[href]',
+                'source[src]', 'source[srcset]',
+                'video[src]', 'video[poster]', 'audio[src]',
+                '[data-bg]', '[data-background]'
+            ];
+            document.querySelectorAll(selectors.join(',')).forEach(function(el) {
+                var tagName = (el.tagName || '').toLowerCase();
+                if (el.hasAttribute('src')) {
+                    var srcVal = el.getAttribute('src');
+                    var mappedSrc = remapUrlForDom(srcVal);
+                    if (mappedSrc && mappedSrc !== srcVal) {
+                        el.setAttribute('src', mappedSrc);
+                    }
+                }
+                if (el.hasAttribute('poster')) {
+                    var posterVal = el.getAttribute('poster');
+                    var mappedPoster = remapUrlForDom(posterVal);
+                    if (mappedPoster && mappedPoster !== posterVal) {
+                        el.setAttribute('poster', mappedPoster);
+                    }
+                }
+                if (el.hasAttribute('srcset')) {
+                    var srcsetVal = el.getAttribute('srcset');
+                    var mappedSrcset = remapSrcsetValue(srcsetVal);
+                    if (mappedSrcset && mappedSrcset !== srcsetVal) {
+                        el.setAttribute('srcset', mappedSrcset);
+                    }
+                }
+                if (tagName === 'link' && el.hasAttribute('href')) {
+                    var hrefVal = el.getAttribute('href');
+                    var mappedHref = remapUrlForDom(hrefVal);
+                    if (mappedHref && mappedHref !== hrefVal) {
+                        el.setAttribute('href', mappedHref);
+                    }
+                }
+                if (el.hasAttribute('data-src')) {
+                    var dsrc = el.getAttribute('data-src');
+                    var mappedDsrc = remapUrlForDom(dsrc);
+                    if (mappedDsrc && mappedDsrc !== dsrc) {
+                        el.setAttribute('data-src', mappedDsrc);
+                    }
+                }
+                if (el.hasAttribute('data-original')) {
+                    var dorig = el.getAttribute('data-original');
+                    var mappedDorig = remapUrlForDom(dorig);
+                    if (mappedDorig && mappedDorig !== dorig) {
+                        el.setAttribute('data-original', mappedDorig);
+                    }
+                }
+                if (el.hasAttribute('data-bg')) {
+                    var dbg = el.getAttribute('data-bg');
+                    var mappedDbg = remapUrlForDom(dbg);
+                    if (mappedDbg && mappedDbg !== dbg) {
+                        el.setAttribute('data-bg', mappedDbg);
+                        if (!el.style.backgroundImage || el.style.backgroundImage === 'none') {
+                            el.style.backgroundImage = 'url(\"' + mappedDbg + '\")';
+                        }
+                    }
+                }
+                if (el.hasAttribute('data-background')) {
+                    var db = el.getAttribute('data-background');
+                    var mappedDb = remapUrlForDom(db);
+                    if (mappedDb && mappedDb !== db) {
+                        el.setAttribute('data-background', mappedDb);
+                        if (!el.style.backgroundImage || el.style.backgroundImage === 'none') {
+                            el.style.backgroundImage = 'url(\"' + mappedDb + '\")';
+                        }
+                    }
+                }
+            });
+        } catch (e) {}
+    }
+
+    try { remapExistingDomUrls(); } catch (e) {}
+    document.addEventListener('DOMContentLoaded', remapExistingDomUrls);
+    window.addEventListener('load', remapExistingDomUrls);
+
+    var _origFetch = window.fetch;
+    if (typeof _origFetch === 'function') {
+        window.fetch = function(input, init) {
+            var mapped = resolveMappedResource(input);
+            if (mapped) {
+                if (typeof Request !== 'undefined' && input instanceof Request) {
+                    try {
+                        var replaced = new Request(mapped, input);
+                        return _origFetch.call(this, replaced, init);
+                    } catch (e) {
+                        return _origFetch.call(this, mapped, init);
+                    }
+                }
+                return _origFetch.call(this, mapped, init);
+            }
+            return _origFetch.apply(this, arguments);
+        };
+    }
+
+    if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        var _origXHROpen = window.XMLHttpRequest.prototype.open;
+        window.XMLHttpRequest.prototype.open = function(method, url) {
+            var mapped = resolveMappedResource(url);
+            if (mapped) {
+                arguments[1] = mapped;
+            }
+            return _origXHROpen.apply(this, arguments);
+        };
+    }
 
     // ── 6. 阻止 History API 导致的路由错误 ──
     try {

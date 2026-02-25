@@ -9,6 +9,7 @@ AST 级解析与路径重写层（核心模块）：
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse, urljoin
 
 from bs4 import BeautifulSoup
@@ -71,7 +72,12 @@ class Parser:
         ("image",  "xlink:href"),
     ]
 
-    def __init__(self, base_url: str, intercepted_urls: set[str] | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        intercepted_urls: set[str] | None = None,
+        page_link_mode: str = "local",
+    ):
         """
         Args:
             base_url: 页面原始 URL（用于解析相对路径）
@@ -83,6 +89,9 @@ class Parser:
         self.resource_map: dict[str, str] = {}  # 原始 URL → 本地路径
         self.discovered_css_urls: set[str] = set()  # 从 CSS 中发现的子资源
         self.page_links: set[str] = set()  # 同 host 页面链接
+        self.page_link_mode = (
+            page_link_mode if page_link_mode in {"local", "absolute"} else "local"
+        )
 
     def parse(self, html: str, current_page_local_path: str = "index.html") -> ParseResult:
         """
@@ -187,7 +196,11 @@ class Parser:
         # 其他 data- 属性
         for tag in soup.find_all(True):
             for attr in list(tag.attrs.keys()):
-                if attr.startswith("data-") and "src" in attr.lower():
+                if attr.startswith("data-") and (
+                    "src" in attr.lower()
+                    or "background" in attr.lower()
+                    or attr.lower() in {"data-bg", "data-bg-src", "data-original"}
+                ):
                     val = tag.get(attr, "")
                     if isinstance(val, str) and val.strip():
                         self._register_url(val.strip())
@@ -277,6 +290,7 @@ class Parser:
         self._rewrite_tag_attrs(soup)
         self._rewrite_src_attrs(soup)
         self._rewrite_data_src_attrs(soup)
+        self._rewrite_lazy_background_attrs(soup)
         self._rewrite_srcset_attrs(soup)
         self._rewrite_inline_style_attrs(soup)
         self._rewrite_style_tags(soup)
@@ -314,7 +328,14 @@ class Parser:
         """重写 data-* 中包含 src 的属性"""
         for tag in soup.find_all(True):
             for attr in list(tag.attrs.keys()):
-                if not (attr.startswith("data-") and "src" in attr.lower()):
+                attr_lower = attr.lower()
+                if not (
+                    attr.startswith("data-")
+                    and (
+                        "src" in attr_lower
+                        or attr_lower in {"data-original", "data-url"}
+                    )
+                ):
                     continue
                 val = tag.get(attr, "")
                 if not isinstance(val, str):
@@ -322,6 +343,33 @@ class Parser:
                 local_ref = self._local_asset_ref(val.strip())
                 if local_ref:
                     tag[attr] = local_ref
+                    self._promote_lazy_resource_to_runtime_attr(tag, attr, local_ref)
+
+    def _rewrite_lazy_background_attrs(self, soup: BeautifulSoup) -> None:
+        """重写 data-bg / data-background 等惰性背景图属性"""
+        for tag in soup.find_all(True):
+            for attr in list(tag.attrs.keys()):
+                attr_lower = attr.lower()
+                if not (
+                    attr_lower in {"data-bg", "data-bg-src", "data-background"}
+                    or "background" in attr_lower
+                ):
+                    continue
+                val = tag.get(attr, "")
+                if not isinstance(val, str):
+                    continue
+                local_ref = self._local_asset_ref(val.strip())
+                if not local_ref:
+                    continue
+                tag[attr] = local_ref
+                style_val = tag.get("style", "")
+                if not isinstance(style_val, str):
+                    style_val = ""
+                if "background-image" not in style_val:
+                    style_val = (style_val.rstrip(";") + ";" if style_val else "") + (
+                        f"background-image:url('{local_ref}')"
+                    )
+                    tag["style"] = style_val
 
     def _rewrite_srcset_attrs(self, soup: BeautifulSoup) -> None:
         """重写 srcset / data-srcset"""
@@ -362,7 +410,7 @@ class Parser:
                 meta["content"] = local_ref
 
     def _rewrite_page_links(self, soup: BeautifulSoup, current_page_local_path: str) -> None:
-        """将同 host 页面链接重写为本地相对路径"""
+        """重写同 host 页面链接（local 模式写本地路径，absolute 模式写原站绝对路径）"""
         for tag in soup.find_all("a", href=True):
             raw_href = (tag.get("href") or "").strip()
             if not raw_href or should_skip_url(raw_href):
@@ -373,6 +421,18 @@ class Parser:
 
             absolute = normalize_crawl_url(raw_href, self.base_url)
             if not absolute or not is_same_host(absolute, self.base_domain):
+                continue
+
+            if self.page_link_mode == "absolute":
+                tag["href"] = absolute + (f"#{fragment}" if fragment else "")
+                tag["target"] = "_blank"
+                rel_val = tag.get("rel")
+                if isinstance(rel_val, list):
+                    rel_set = set(rel_val)
+                    rel_set.update({"noopener", "noreferrer"})
+                    tag["rel"] = list(rel_set)
+                else:
+                    tag["rel"] = "noopener noreferrer"
                 continue
 
             target_local = url_to_local_page_path(absolute, self.base_domain)
@@ -555,12 +615,56 @@ class Parser:
             )
         ]
 
+    @staticmethod
+    def _is_lazy_placeholder(src: str) -> bool:
+        """判断 src 是否为常见占位图"""
+        if not src:
+            return True
+        s = src.strip().lower()
+        if not s:
+            return True
+        if s.startswith("data:image"):
+            # 避免把完整 base64 正常图误判为占位
+            return len(s) < 256 or "r0lgodh" in s
+        return any(
+            keyword in s
+            for keyword in ("placeholder", "spacer", "blank", "loading", "pixel")
+        )
+
+    def _promote_lazy_resource_to_runtime_attr(
+        self, tag, attr: str, local_ref: str
+    ) -> None:
+        """将 data-src/data-srcset 的真实地址同步到 src/srcset，避免 JS 失效后图片不显示"""
+        attr_lower = attr.lower()
+        if attr_lower in {"data-srcset", "data-lazy-srcset"}:
+            current_srcset = (tag.get("srcset") or "").strip()
+            if not current_srcset:
+                tag["srcset"] = local_ref
+            return
+
+        if tag.name == "source":
+            if "srcset" in attr_lower:
+                tag["srcset"] = local_ref
+            elif not tag.get("src"):
+                tag["src"] = local_ref
+            return
+
+        if tag.name != "img":
+            return
+
+        current_src = (tag.get("src") or "").strip()
+        if self._is_lazy_placeholder(current_src):
+            tag["src"] = local_ref
+        if attr_lower in {"data-srcset", "data-lazy-srcset"} and not tag.get("srcset"):
+            tag["srcset"] = local_ref
+
 
 def parse_external_css(
     css_text: str,
     css_url: str,
     resource_map: dict[str, str],
     base_domain: str,
+    current_css_local_path: str | None = None,
 ) -> tuple[str, dict[str, str], set[str]]:
     """
     解析外部 CSS 文件的内容，提取 url() 引用并重写路径
@@ -583,6 +687,11 @@ def parse_external_css(
         )
     except Exception:
         return css_text, new_resources, sub_css_urls
+
+    def _css_ref(local_target: str) -> str:
+        if current_css_local_path:
+            return make_relative_path(current_css_local_path, local_target)
+        return f"./{local_target}"
 
     def scan_and_collect(nodes):
         for node in nodes:
@@ -658,13 +767,13 @@ def parse_external_css(
                     if url:
                         absolute = normalize_url(url, css_url)
                         if absolute in resource_map:
-                            local = resource_map[absolute]
+                            local = _css_ref(resource_map[absolute])
                             if val.type == "url":
-                                val.value = f"./{local}"
-                                val.representation = f"url(./{local})"
+                                val.value = local
+                                val.representation = f"url({local})"
                             elif val.type == "string":
-                                val.value = f"./{local}"
-                                val.representation = f"'./{local}'"
+                                val.value = local
+                                val.representation = f"'{local}'"
 
             for attr_name in ("content", "prelude"):
                 values = getattr(node, attr_name, None)
@@ -677,8 +786,9 @@ def parse_external_css(
                 url = val.value.strip()
                 absolute = normalize_url(url, css_url)
                 if absolute in resource_map:
-                    val.value = f"./{resource_map[absolute]}"
-                    val.representation = f"url(./{resource_map[absolute]})"
+                    local = _css_ref(resource_map[absolute])
+                    val.value = local
+                    val.representation = f"url({local})"
 
             elif val.type == "function" and val.lower_name == "url":
                 inner = "".join(
@@ -687,7 +797,7 @@ def parse_external_css(
                 ).strip().strip("'\"")
                 absolute = normalize_url(inner, css_url)
                 if absolute in resource_map:
-                    local = f"./{resource_map[absolute]}"
+                    local = _css_ref(resource_map[absolute])
                     from tinycss2.ast import StringToken
                     new_token = StringToken(
                         val.arguments[0].source_line if val.arguments else 0,
@@ -706,3 +816,58 @@ def parse_external_css(
 
     rewritten_css = tinycss2.serialize(tokens)
     return rewritten_css, new_resources, sub_css_urls
+
+
+# JS 字符串中常见的静态资源引用（用于补抓 script 里硬编码图片/字体）
+JS_ASSET_LITERAL_RE = re.compile(
+    r"""(?P<q>['"])(?P<url>(?:(?:https?:)?//|/|\.{1,2}/|[A-Za-z0-9_-]+/)[^'"]+?\.(?:png|jpe?g|gif|webp|svg|ico|mp4|webm|mp3|ogg|wav|woff2?|ttf|otf|eot)(?:\?[^'"]*)?)(?P=q)""",
+    re.IGNORECASE,
+)
+
+
+def parse_external_js_assets(
+    js_text: str,
+    js_url: str,
+    resource_map: dict[str, str],
+    base_domain: str,
+) -> dict[str, str]:
+    """
+    从 JS 文本中提取静态资源 URL（字符串字面量），并并入资源映射。
+    """
+    new_resources: dict[str, str] = {}
+    if not js_text:
+        return new_resources
+
+    parsed_js = urlparse(js_url)
+    site_origin = ""
+    if parsed_js.scheme and parsed_js.netloc:
+        site_origin = f"{parsed_js.scheme}://{parsed_js.netloc}"
+
+    for match in JS_ASSET_LITERAL_RE.finditer(js_text):
+        raw_url = (match.group("url") or "").strip()
+        if not raw_url or should_skip_url(raw_url):
+            continue
+
+        candidates: list[str] = []
+        # JS 字面量里的资源路径，绝大多数是相对于站点根目录，而不是 JS 文件目录。
+        if raw_url.startswith(("http://", "https://", "//", "/")):
+            candidates.append(normalize_url(raw_url, js_url))
+        else:
+            trimmed = raw_url
+            while trimmed.startswith("./"):
+                trimmed = trimmed[2:]
+            while trimmed.startswith("../"):
+                trimmed = trimmed[3:]
+            if site_origin:
+                candidates.append(normalize_url(f"/{trimmed}", site_origin))
+            candidates.append(normalize_url(raw_url, js_url))
+
+        for absolute in candidates:
+            if not absolute or should_skip_url(absolute):
+                continue
+            if absolute in resource_map:
+                continue
+            resource_map[absolute] = url_to_local_path(absolute, base_domain)
+            new_resources[absolute] = resource_map[absolute]
+
+    return new_resources
