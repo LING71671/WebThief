@@ -78,16 +78,14 @@ console = Console()
     help="详细日志输出",
 )
 @click.option(
-    "--enable-qr-intercept",
-    is_flag=True,
+    "--enable-qr-intercept/--disable-qr-intercept",
     default=True,
-    help="启用二维码拦截（实时二维码克隆）",
+    help="启用/禁用二维码拦截（实时二维码克隆）",
 )
 @click.option(
-    "--enable-react-intercept",
-    is_flag=True,
+    "--enable-react-intercept/--disable-react-intercept",
     default=True,
-    help="启用 React 组件拦截（完全体交互菜单）",
+    help="启用/禁用 React 组件拦截（完全体交互菜单）",
 )
 @click.option(
     "--crawl-site/--single-page",

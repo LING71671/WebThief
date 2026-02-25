@@ -1,0 +1,287 @@
+{
+    "version": "https://jsonfeed.org/version/1",
+    "title": "Trae Blog | RSS Feed",
+    "home_page_url": "https://trae.ai",
+    "items": [
+        {
+            "id": "trae_membership_0213",
+            "url": "https://trae.ai/blog/trae_membership_0213",
+            "title": "Upgrading TRAE Membership Benefits",
+            "summary": "TRAE launches new token-based pricing with four membership tiers from $3 to $100 monthly, starting February 24, 2026. A 14-day free Pro trial for new users is also available after this transition.",
+            "date_modified": "2026-02-13T00:00:00.000Z",
+            "author": {
+                "name": "The TRAE Team"
+            }
+        },
+        {
+            "id": "vercel_in_trae",
+            "url": "https://trae.ai/blog/vercel_in_trae",
+            "title": "Ship AI Software Faster with Vercel",
+            "summary": "How to build and deploy AI software in a fast way with TRAE and Vercel",
+            "date_modified": "2026-01-19T00:00:00.000Z",
+            "author": {
+                "name": "Gary Qi",
+                "url": "https://x.com/gary_qz"
+            }
+        },
+        {
+            "id": "trae_tutorial_0115",
+            "url": "https://trae.ai/blog/trae_tutorial_0115",
+            "title": "Best Practices for Agent Skills in TRAE",
+            "summary": "We've put together a guide on how to create, import, and use Agent Skills in TRAE.",
+            "date_modified": "2026-01-15T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://x.com/whosamberella"
+            }
+        },
+        {
+            "id": "supabase_112",
+            "url": "https://trae.ai/blog/supabase_112",
+            "title": "Build Backend Seamlessly with Supabase",
+            "summary": "How TRAE integrates with Supabase.",
+            "date_modified": "2026-01-11T00:00:00.000Z",
+            "author": {
+                "name": "Gary Qi",
+                "url": "https://x.com/gary_qz"
+            }
+        },
+        {
+            "id": "engineering_thought_0108",
+            "url": "https://trae.ai/blog/engineering_thought_0108",
+            "title": "Making AI Coding Safer: How TRAE Protects Your Codebase",
+            "summary": "We're introducing sandboxing and a multi-layer security system designed to reduce security risk while keeping AI productive.",
+            "date_modified": "2026-01-08T00:00:00.000Z",
+            "author": {
+                "name": "The TRAE Team"
+            }
+        },
+        {
+            "id": "engineering_thought_1229",
+            "url": "https://trae.ai/blog/engineering_thought_1229",
+            "title": "Cue-Pro Technical Deep Dive",
+            "summary": "A technical deep dive into how we think and build Cue-Pro.",
+            "date_modified": "2025-12-29T00:00:00.000Z",
+            "author": {
+                "name": "Bo Jiang",
+                "url": "https://x.com/JacobJiang12290"
+            }
+        },
+        {
+            "id": "product_update_1229",
+            "url": "https://trae.ai/blog/product_update_1229",
+            "title": "Introducing Cue-Pro: a bird's-eye view of your edit predictions",
+            "summary": "We upgraded Cue with repository-level edit sequences that keep you in flow",
+            "date_modified": "2025-12-29T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://x.com/whosamberella"
+            }
+        },
+        {
+            "id": "solo_tutorial_1112",
+            "url": "https://trae.ai/blog/solo_tutorial_1112",
+            "title": "Quickstart to SOLO Coder",
+            "summary": "This guide will get you started with using a coding agent like SOLO coder in just a few minutes. We'll show you how to use SOLO Coder for some common development tasks.",
+            "date_modified": "2025-11-09T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://www.linkedin.com/in/amber-hanzi-shen/"
+            }
+        },
+        {
+            "id": "product_solo_1112",
+            "url": "https://trae.ai/blog/product_solo_1112",
+            "title": "TRAE SOLO GA Release",
+            "summary": "TRAE SOLO is the responsive coding agent we built for real-world software development.",
+            "date_modified": "2025-11-04T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://www.linkedin.com/in/amber-hanzi-shen/"
+            }
+        },
+        {
+            "id": "case_study_0905",
+            "url": "https://trae.ai/blog/case_study_0905",
+            "title": "Scaling Velocity: How Keywords AI Accelerates Development with TRAE SOLO",
+            "summary": "How a lean team builds production features end-to-end with an AI engineer that “understands, executes, and delivers.”",
+            "date_modified": "2025-09-05T00:00:00.000Z",
+            "author": {
+                "name": "Hendrix Liu",
+                "url": "https://www.linkedin.com/in/hendrix-liu-7a015822b/"
+            }
+        },
+        {
+            "id": "trae_update_0902",
+            "url": "https://trae.ai/blog/trae_update_0902",
+            "title": "Max Mode in TRAE",
+            "summary": "We are introducing Max Mode, which is designed for deep coding with larger context windows and more tool calls.",
+            "date_modified": "2025-09-02T00:00:00.000Z",
+            "author": {
+                "name": "The TRAE Team"
+            }
+        },
+        {
+            "id": "trae_tutorial_0825",
+            "url": "https://trae.ai/blog/trae_tutorial_0825",
+            "title": "Best Practices for TRAE Rules",
+            "summary": "Stop repeating yourself. In this article we dive into how to set up TRAE Rules that remember your preferences, keep your team aligned, and avoid the common mistakes that make AI ignore your instructions.",
+            "date_modified": "2025-08-25T00:00:00.000Z",
+            "author": {
+                "name": "Yunfeng Guan"
+            }
+        },
+        {
+            "id": "engineering_thought_0822",
+            "url": "https://trae.ai/blog/engineering_thought_0822",
+            "title": "Challenges and Considerations Behind Trae Cue",
+            "summary": "Cue is one of the latest and most complex AI development tool features developed by TRAE. We explored the technical challenges, achievements as well as future plans for TRAE Cue.",
+            "date_modified": "2025-08-22T00:00:00.000Z",
+            "author": {
+                "name": "Bo Jiang",
+                "url": "https://x.com/JacobJiang12290"
+            }
+        },
+        {
+            "id": "product_thought_0819",
+            "url": "https://trae.ai/blog/product_thought_0819",
+            "title": "Understanding Trae’s Data Practices",
+            "summary": "This blog answers some of the most common questions about Trae’s data practices. We’ll explain where data is stored, how it’s used, and what options you have to control its collection and use.",
+            "date_modified": "2025-08-18T00:00:00.000Z",
+            "author": {
+                "name": "The TRAE Team"
+            }
+        },
+        {
+            "id": "engineering_thought_0731",
+            "url": "https://trae.ai/blog/engineering_thought_0731",
+            "title": "Cue Major Update",
+            "summary": "Trae Cue gets its biggest monthly update with major improvements to model performance and speed.",
+            "date_modified": "2025-07-30T00:00:00.000Z",
+            "author": {
+                "name": "Bo Jiang",
+                "url": "https://x.com/JacobJiang12290"
+            }
+        },
+        {
+            "id": "product_new_look",
+            "url": "https://trae.ai/blog/product_new_look",
+            "title": "Fresh New Look",
+            "summary": "TRAE 2.0 marks a full - scale design upgrade for a more focused, intelligent development experience.",
+            "date_modified": "2025-07-18T00:00:00.000Z",
+            "author": {
+                "name": "Guangxi Cai",
+                "url": "https://www.linkedin.com/in/guangxi-cai/"
+            }
+        },
+        {
+            "id": "product_solo",
+            "url": "https://trae.ai/blog/product_solo",
+            "title": "SOLO is All You Need",
+            "summary": "The AI that builds complete software.",
+            "date_modified": "2025-07-17T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://www.linkedin.com/in/amber-hanzi-shen/"
+            }
+        },
+        {
+            "id": "product_update_0625",
+            "url": "https://trae.ai/blog/product_update_0625",
+            "title": "Trae Agent reached #1 on SWE-bench Verified, with Claude 4 - and it's open-sourced.",
+            "summary": "Trae Agent reached #1 on SWE-bench Verified, with Claude 4 — and it’s open-sourced.",
+            "date_modified": "2025-06-25T00:00:00.000Z",
+            "author": {
+                "name": "Chao Peng",
+                "url": "https://chao-peng.github.io/"
+            }
+        },
+        {
+            "id": "product_thought_0617",
+            "url": "https://trae.ai/blog/product_thought_0617",
+            "title": "Trae Agent 2.0: Smarter Architecture, Tools, and Memory",
+            "summary": "Trae Agent 2.0 featured a reengineered architecture, unified agent modes, smarter tool orchestration, and long-term memory that brings us closer to building the real AI engineer.",
+            "date_modified": "2025-06-17T00:00:00.000Z",
+            "author": {
+                "name": "Jiayu Tang",
+                "url": "https://www.linkedin.com/in/jiayu-tang/"
+            }
+        },
+        {
+            "id": "product_thought_0428",
+            "url": "https://trae.ai/blog/product_thought_0428",
+            "title": "@Agent: Rules + Tools to Define Your Future Agents",
+            "summary": "Deep dive into @Agent and how we built it.",
+            "date_modified": "2025-04-28T00:00:00.000Z",
+            "author": {
+                "name": "Yang Shi",
+                "url": "https://www.linkedin.com/in/ysyangshi?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app"
+            }
+        },
+        {
+            "id": "product_thought_0421",
+            "url": "https://trae.ai/blog/product_thought_0421",
+            "title": "Collaborate with Intelligence",
+            "summary": "Trae unveils major updates: a unified Chat - Builder interface, @Agent system with MCP for multi - agent collaboration, and smarter context handling (#Web, #Doc, Rules). Boost your workflow with AI - driven coding and adaptable agents.",
+            "date_modified": "2025-04-21T00:00:00.000Z",
+            "author": {
+                "name": "Yang Shi",
+                "url": "https://www.linkedin.com/in/ysyangshi?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app"
+            }
+        },
+        {
+            "id": "product_thought_0416",
+            "url": "https://trae.ai/blog/product_thought_0416",
+            "title": "Beyond AI Coding: Trae's Vision for Human-AI Collaboration",
+            "summary": "Trae's vision is to empower seamless collaboration between humans and AI by advancing AI-driven coding, enabling developers to work smarter, faster, and more creatively.",
+            "date_modified": "2025-04-16T00:00:00.000Z",
+            "author": {
+                "name": "Yang Shi",
+                "url": "https://www.linkedin.com/in/ysyangshi?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app"
+            }
+        },
+        {
+            "id": "product_thought_0526",
+            "url": "https://trae.ai/blog/product_thought_0526",
+            "title": "More Agentic",
+            "summary": "We've improved our agent capabilities with better context understanding and greater autonomy.",
+            "date_modified": "2025-05-26T00:00:00.000Z",
+            "author": {
+                "name": "Yang Shi",
+                "url": "https://www.linkedin.com/in/ysyangshi?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app"
+            }
+        },
+        {
+            "id": "product_update_0528",
+            "url": "https://trae.ai/blog/product_update_0528",
+            "title": "Trae Achieves #1 on SWE-bench Verified with Claude 3.7",
+            "summary": "Trae achieves 71.0% accuracy on SWE-bench Verified with Claude 3.7, pushing the boundaries of automated issue resolving. Not just fast. Not just big. But deeply aligned with the nature of engineering.",
+            "date_modified": "2025-05-28T00:00:00.000Z",
+            "author": {
+                "name": "Pengfei Gao",
+                "url": "https://cumt-gpf.github.io/"
+            }
+        },
+        {
+            "id": "product_thought_0609",
+            "url": "https://trae.ai/blog/product_thought_0609",
+            "title": "Mastering Context in Trae",
+            "summary": "We've put together this guide that shows you how to make smart use of context in Trae to collaborate seamlessly with your AI partner.",
+            "date_modified": "2025-06-09T00:00:00.000Z",
+            "author": {
+                "name": "Amber Shen",
+                "url": "https://www.linkedin.com/in/amber-hanzi-shen/"
+            }
+        },
+        {
+            "id": "trae_2025_yearly_review",
+            "url": "https://trae.ai/blog/trae_2025_yearly_review",
+            "title": "TRAE 2025 Unwrapped",
+            "summary": "This is your year in review. Let's look back at what we created together.",
+            "date_modified": "2025-12-25T00:00:00.000Z",
+            "author": {
+                "name": "The TRAE Team"
+            }
+        }
+    ]
+}

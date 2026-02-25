@@ -1,0 +1,298 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><link rel="icon" href="data:,"><title>Client-API Modal Integration</title><script>var url = window.location.href.replace('index.html', 'api.js');
+      var urlSplit = url.split('/');
+      var keyLocation = urlSplit[urlSplit.length - 2];
+      var publicKey = keyLocation === 'v2' ? null : keyLocation;
+      var crossOrigin = "";
+      var hash = "";
+      
+      crossOrigin = 'anonymous';
+      hash = 'sha384-lbvwXIcN7j0C6wFv9z4TWGgm/udARINke4Du5xBE65liFXIAKSrjTgMQXyNihsiU';
+      
+      var callback = "setupEnforcement"
+      var script = document.createElement("script");
+      script.type = "text/javascript";
+      script.src = url;
+      script.setAttribute("data-callback", callback);
+      script.setAttribute("data-nonce", "12345678910")
+      script.async = true;
+      script.defer = true;
+      if (crossOrigin) {
+        script.crossOrigin = crossOrigin;
+        script.integrity = hash;
+      }
+      document.head.appendChild(script);</script><style>html, body { font-family: Arial, Helvetica, sans-serif; }
+      .buttonWrapper {
+        margin: 0.25em 0 1.5em;
+      }
+      h1 {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      h3 {
+        font-size: 14px;;
+        margin-bottom: 0.5em;
+      }
+      .tokenWrapper {
+        margin-bottom: 1.5em;
+        max-width: 100%;
+        overflow: auto;
+      }
+      .footer {
+        margin: 1.5em 0 0;
+        font-size: 13px;
+      }
+      #console {
+        font-size: 11px;
+        overflow: auto;
+        max-height: 50px;
+        max-width: 600px;
+        height: 50px;
+        border: 1px solid grey;
+        padding: 0.5em;
+        background-color: rgb(247, 247, 247);
+      }
+      #console span {
+        display: block;
+        margin-bottom: 0.5em;
+        padding-bottom: 0.5em;
+        border-bottom: 1px solid rgb(235, 235, 235);
+      }
+      .inputWrapper {
+        margin: 1.5em 0 2.5em;
+        font-size: 14px;
+      }
+      .inputWrapper.scenario {
+        margin-top: 1em;
+        margin-bottom: 1.5em;
+      }
+      .inputWrapper select {
+        min-width: 150px;
+        margin-right: 0.5em;
+      }
+      .hidden {
+        display: none;
+        visibility: hidden;
+      }</style></head><body><h1>Client API Modal Test</h1><h3>Actions</h3><div class="buttonWrapper"><button id="open" disabled="disabled">Open</button> <button id="reset">Reset</button> <button id="run" disabled="disabled">Run</button> <button id="setConfig">Set Config</button></div><h3>Scenarios</h3><div class="inputWrapper scenario hidden" id="publicKeyWrapper"><div class="input"><span><input type="text" id="publicKey" name="publicKey" placeholder="Public Key"> </span><button id="setPublicKey">Set Public Key</button></div></div><div class="inputWrapper scenario"><div class="input"><span id="themeWrapper"><input type="text" id="theme" name="theme" placeholder="Theme"> </span><button id="setTheme">Set Theme</button></div></div><div class="buttonWrapper"><button id="setIsSDK">SDK</button></div><h3>Token</h3><div id="token" class="tokenWrapper"></div><h3>Events</h3><table class="events"><tbody><tr><td><input data-e2e="onCompleted" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onCompleted <span data-e2e="token"></span></td><td data-e2e="onCompleted-count"></td></tr><tr><td><input data-e2e="onHide" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onHide <span data-e2e="onHide:event:completed"></span> <span data-e2e="onHide:event:token"></span></td><td data-e2e="onHide-count"></td></tr><tr><td><input data-e2e="onReady" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onReady</td><td data-e2e="onReady-count"></td></tr><tr><td><input data-e2e="onShow" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onShow</td><td data-e2e="onShow-count"></td></tr><tr><td><input data-e2e="onShown" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onShown</td><td data-e2e="onShown-count"></td></tr><tr><td><input data-e2e="onResize" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onResize</td><td data-e2e="onResize-count"></td></tr><tr><td><input data-e2e="onReset" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onReset</td><td data-e2e="onReset-count"></td></tr><tr><td><input data-e2e="onSuppress" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onSuppress</td><td data-e2e="onSuppress-count"></td></tr><tr><td><input data-e2e="onError" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onError</td><td data-e2e="onError-count"></td></tr><tr><td><input data-e2e="onWarning" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onWarning</td><td data-e2e="onWarning-count"></td></tr><tr><td><input data-e2e="onFailed" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onFailed</td><td data-e2e="onFailed-count"></td></tr><tr><td><input data-e2e="onDataRequest" autocomplete="off" type="checkbox" disabled="disabled"></td><td>onDataRequest</td><td data-e2e="onDataRequest-count"></td></tr></tbody></table><h3>Console</h3><div id="console"></div><footer class="footer"><div>Client-API Version: 2.17.6</div></footer></body><script>// polyfill console.log
+    window.console = window.console || { debug: function(){}, log: function() { } };
+    var nativeConsoleLog = console.log;
+    var loading = true;
+    var isSDK = false;
+    var currentTheme = null;
+
+    window.console.log = function () {
+      var elem = document.getElementById('console');
+      var stringValue = '';
+      for (var i = 0; i < arguments.length; i++) {
+        var log = arguments[i];
+        try {
+          stringValue += (i > 0 ? ' ' : '') + (typeof log === 'object' && JSON && JSON.stringify ? JSON.stringify(log) : log);
+        } catch (e) {}
+      }
+      var span = document.createElement('span');
+      span.textContent = stringValue;
+      elem.appendChild(span);
+      elem.scrollTop = elem.scrollHeight;
+      nativeConsoleLog.apply(this, arguments);
+    }
+
+    function sanitize(string) {
+      var map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#x27;',
+        "/": '&#x2F;',
+      };
+      var reg = /[&<>"'/]/ig;
+      return string.replace(reg, function (match) {
+        return map[match]
+      });
+    }
+
+    function updateBtns() {
+      if (loading) {
+        document.getElementById("open").setAttribute('disabled', true);
+        document.getElementById("run").setAttribute('disabled', true);
+        return;
+      }
+      document.getElementById("open").removeAttribute('disabled');
+      document.getElementById("run").removeAttribute('disabled');
+      return;
+    }
+
+    document.getElementById('reset').onclick = function() {
+      if (window.enforcement) {
+        window.enforcement.reset();
+      }
+    }
+
+    document.getElementById('run').onclick = function() {
+      if (window.enforcement) {
+        window.enforcement.run();
+      }
+    }
+
+    document.getElementById('setConfig').onclick = function() {
+      if (window.enforcement) {
+        setConfig(window.enforcement);
+      }
+    }
+
+    document.getElementById('setIsSDK').onclick = function() {
+      if (window.enforcement) {
+        isSDK = true;
+        setConfig(window.enforcement);
+      }
+    };
+
+    document.getElementById('setTheme').onclick = function() {
+      var rawTheme = document.getElementById('theme').value;
+      currentTheme = sanitize(rawTheme);
+      if (window.enforcement) {
+        setConfig(window.enforcement);
+      }
+    }
+
+    function updateEvent(event) {
+      var checkbox = document.querySelectorAll('[data-e2e="' + event + '"]');
+      if (checkbox) {
+        checkbox[0].checked = true;
+      }
+      var counter = document.querySelectorAll('[data-e2e="' + event + '-count"]');
+      if (counter) {
+        var container = counter[0];
+        container.innerHTML = container.innerHTML + ' &#8226';
+      }
+    }
+
+    // Required for IE as checkbox inputs are not reset on refresh
+    function resetCheckboxes() {
+      var events = document.querySelectorAll('.events [type="checkbox"]')
+
+      for (i = 0; i < events.length; i++) {
+        var checkbox = events[i]
+        if (checkbox) {
+          checkbox.checked = false;
+        }
+      }
+    }
+
+    function updateToken(value) {
+      document.getElementById('token').textContent = value;
+    }
+
+    function setConfig(enforcement) {
+      if (!publicKey) return;
+      enforcement.setConfig({
+        publicKey: publicKey,
+        styleTheme: currentTheme,
+        selector: '#open',
+        isSDK: isSDK,
+        enableDirectionalInput: false,
+        onCompleted: function (event) {
+          updateEvent('onCompleted');
+          updateToken(event.token);
+          console.log('onCompleted: ', event);
+        },
+        onReady: function (event) {
+          updateEvent('onReady');
+          loading = false;
+          updateBtns();
+          console.log('onReady: ', event);
+        },
+        onHide: function (event) {
+          updateEvent('onHide');
+          console.log('onHide: ', event);
+        },
+        onShow: function (event) {
+          updateEvent('onShow');
+          console.log('onShow: ', event);
+        },
+        onShown: function (event) {
+          updateEvent('onShown');
+          updateToken(event.token);
+          console.log('onShown:', event);
+        },
+        onFailed: function (event) {
+          updateEvent('onFailed');
+          updateToken(event.token);
+          console.log('onFailed:', event);
+        },
+        onReset: function (event) {
+          updateEvent('onReset');
+          updateBtns();
+          console.log('onReset: ', event);
+        },
+        onResize: function (event) {
+          updateEvent('onResize');
+          console.log('onResize:', event);
+        },
+        onSuppress: function (event) {
+          updateEvent('onSuppress');
+          updateToken(event.token);
+          console.log('onSuppress:', event);
+        },
+        onError: function (event) {
+          updateEvent('onError');
+          console.log('thrown error:', event.error);
+          console.log('onError:', event);
+        },
+        onWarning: function (event) {
+          updateEvent('onWarning');
+          console.log('thrown warning:', event.warning);
+          console.log('onWarning:', event);
+        },
+        onDataRequest: function (event) {
+          updateEvent('onDataRequest');
+          console.log('onDataRequest:', event);
+        },
+      });
+    }
+
+    function setupEnforcement(enforcement) {
+      resetCheckboxes()
+      window.enforcement = enforcement;
+      updateToken('-');
+      setConfig(enforcement);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var query = window.location.href.slice(window.location.href.indexOf('?') + 1);
+        var values = [];
+        if (query.indexOf('themes=') > -1) {
+          values = query.split('=').pop().split(',');
+        }
+        if (values.length) {
+          var select = document.createElement('select');
+          select.id = 'theme';
+          select.name = 'theme';
+
+          var defaultOption = document.createElement('option');
+          defaultOption.value = '';
+          defaultOption.textContent = 'Select Theme';
+          select.appendChild(defaultOption);
+
+          for (var i = 0; i < values.length; i++) {
+            var val = sanitize(values[i]);
+            var option = document.createElement('option');
+            option.value = val;
+            option.textContent = val;
+            select.appendChild(option);
+          }
+
+          var themeWrapper = document.querySelector('#themeWrapper');
+          themeWrapper.innerHTML = '';
+          themeWrapper.appendChild(select);
+        }
+
+        if (!publicKey) {
+          document.querySelector('#publicKeyWrapper').classList.remove('hidden');
+          document.querySelector('#setPublicKey').addEventListener('click', function () {
+            var rawPublicKey = document.querySelector('#publicKey').value;
+            publicKey = sanitize(rawPublicKey);
+            console.log('Setting Public Key:', publicKey);
+            setConfig(window.enforcement);
+          });
+        }
+      });</script></html>

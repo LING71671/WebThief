@@ -1,4 +1,4 @@
-# WebThief Advanced Guide
+﻿# WebThief Advanced Guide
 
 This guide covers advanced runtime-preservation features for JS-heavy sites.
 
@@ -8,6 +8,8 @@ WebThief has two optional interception modules enabled by default:
 
 - QR interception: capture QR lifecycle signals and inject QR bridge runtime.
 - React/menu interception: preserve dynamic menus and convert part of JS visibility logic into CSS/runtime fallback.
+- Runtime Replay Engine: v1.0 Shim with full XHR/fetch response mirroring and proxy-based location spoofing.
+- Viewport Activation: segment-based scrolling and event dispatching to trigger IntersectionObservers.
 
 ## 5-Minute Quick Start
 
@@ -39,8 +41,19 @@ webthief https://example.com --single-page --keep-js --wait 5 -v
 - `--single-page`: best when you want homepage fidelity and external absolute jumps.
 - `--crawl-site`: best when you need local multi-page navigation.
 - `--wait N`: extra settle time after load; useful for delayed JS rendering.
+- `DOM_SETTLE_TIMEOUT`: WebThief now uses a `MutationObserver` to wait for the DOM to become "quiet" before taking a snapshot.
 
-## Recommended Workflows
+## New High-Fidelity Features
+
+### 1. Viewport Activation Preload
+Unlike simple scrolling, WebThief now breaks the page into segments and dispatches `scroll`, `resize`, and `wheel` events to each. This ensures that modern sites using `IntersectionObserver` (like AOS, ScrollMagic, or custom React hooks) are fully "awakened" before capture.
+
+### 2. Runtime Shim v1.0 (Network Mirroring)
+WebThief now captures the actual body and content-type of dynamic API calls (XHR/fetch). These are injected into the cloned page as a `__WEBTHIEF_RESPONSE_MAP__`.
+The local Runtime Shim intercepts network requests and serves these cached responses, allowing complex apps to "think" they are still connected to the backend.
+
+### 3. Proxy-based Location Spoofing
+We use a JavaScript `Proxy` to fake `window.location`. Page scripts that check `location.hostname` or `location.origin` will see the original target domain even when running on `file://` or `localhost`. This bypasses many environment-based protection and routing logics.
 
 ### Dynamic homepage clone (recommended)
 

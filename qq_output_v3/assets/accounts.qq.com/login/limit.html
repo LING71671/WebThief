@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+        <html class="">
+        <head>
+            <script>window.qPerformance = { headStart: Date.now() };</script>
+            
+        <script src="https://framework.cdn-go.cn/AegisReport/v1.6.0/index.js"></script>
+        <script>
+             window.g_aegis = window.AegisReport && window.AegisReport.default('RiaWqsnTRBqQEHjEzo')
+        </script>
+    
+            <script>
+            try {
+                window.g_aegis && window.g_aegis.reportTime({
+                    name: 'headStart',
+                    duration: window.qPerformance.headStart - window.performance.timing.navigationStart
+                })
+            } catch (error) {
+            }
+            </script>
+            
+    <meta charset="utf-8">
+    <meta name="Copyright" content="Tencent">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+	<meta name="keywords" content="QQ">
+	<meta name="description" content="QQ">
+	<meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+	<meta name="x5-pagetype" content="optpage">
+
+            <title>账号解冻</title>
+            
+            <link rel="icon" href="https://ok.gtimg.cn/public/aq/favicon.ico" type="image/x-icon" />
+  <link rel="shortcut icon" href="https://ok.gtimg.cn/public/aq/favicon.ico" type="image/x-icon" />
+            <script> 
+              window.qPerformance.headEnd = Date.now() - window.qPerformance.headStart; 
+              window.g_aegis && window.g_aegis.reportTime({
+                name: 'headEnd',
+                duration: window.qPerformance.headEnd
+              })
+            </script>
+            <script>
+            function loadScript (src, opts, cb) {
+                var head = document.head || document.getElementsByTagName('head')[0]
+                var script = document.createElement('script')
+              
+                if (typeof opts === 'function') {
+                  cb = opts
+                  opts = {}
+                }
+              
+                opts = opts || {}
+                cb = cb || function() {}
+              
+                script.type = opts.type || 'text/javascript'
+                script.charset = opts.charset || 'utf8';
+                script.async = 'async' in opts ? !!opts.async : true
+                script.src = src
+              
+                if (opts.attrs) {
+                  scriptLoaderSetAttributes(script, opts.attrs)
+                }
+              
+                if (opts.text) {
+                  script.text = '' + opts.text
+                }
+              
+                var onend = 'onload' in script ? scriptLoaderStdOnEnd : scriptLoaderIeOnEnd
+                onend(script, cb)
+              
+                // some good legacy browsers (firefox) fail the 'in' detection above
+                // so as a fallback we always set onload
+                // old IE will ignore this and new IE will set onload
+                if (!script.onload) {
+                  scriptLoaderStdOnEnd(script, cb);
+                }
+              
+                head.appendChild(script)
+              }
+              
+              function scriptLoaderSetAttributes(script, attrs) {
+                for (var attr in attrs) {
+                  script.setAttribute(attr, attrs[attr]);
+                }
+              }
+              
+              function scriptLoaderStdOnEnd (script, cb) {
+                script.onload = function () {
+                  this.onerror = this.onload = null
+                  cb(null, script)
+                }
+                script.onerror = function () {
+                  // this.onload = null here is necessary
+                  // because even IE9 works not like others
+                  this.onerror = this.onload = null
+                  cb(new Error('Failed to load ' + this.src), script)
+                }
+              }
+              
+              function scriptLoaderIeOnEnd (script, cb) {
+                script.onreadystatechange = function () {
+                  if (this.readyState != 'complete' && this.readyState != 'loaded') return
+                  this.onreadystatechange = null
+                  cb(null, script) // there is no way to catch loading errors in IE8
+                }
+              }
+            </script>
+            
+    <script>
+      (function() {
+        var RELOAD_CSS_RESOURCE = false;
+        var RELOAD_JS_RESOURCE = false;
+        var RESOURCE_TYPE = {
+          js: 'js',
+          css: 'css',
+        };
+        // 监听页面错误
+        document.addEventListener('error', handlePageError, true);
+
+        function handlePageError(e) {
+          var tagName = e.target.tagName || '';
+          tagName = tagName.toLowerCase();
+          if (tagName === 'script') {
+            handleResourceError(RESOURCE_TYPE.js, e.target.src);
+          }
+          if (tagName === 'link' && e.target.rel === 'stylesheet') {
+            handleResourceError(RESOURCE_TYPE.css, e.target.href);
+          }
+        }
+        // 是否在白名单内
+        function checkAllowList(url) {
+          var allowList = [
+            'npm.cdn-go.cn/vue',
+            'security-web.cdn-go.cn',
+            'qq-web.cdn-go.cn',
+            'local.qq.com',
+          ];
+          var result = allowList.some(function(item) {
+            return url.indexOf(item) > -1;
+          });
+          return result;
+        }
+        function getReloadUrl(filename) {
+          var primaryDomainName = window.location.origin + window.location.pathname;
+          var reloadUrl = primaryDomainName + '/' + filename + '?qreload=1';
+          return reloadUrl;
+        }
+        function handleResourceError(type, url) {
+          // 不在白名单内
+          if (!checkAllowList(url)) {
+            console.warn('Not In AllowList', url);
+            return;
+          }
+
+          if (type === RESOURCE_TYPE.js) {
+            handleReloadJSResource(url);
+          }
+
+          if (type === RESOURCE_TYPE.css) {
+            handleReloadCSSResource(url);
+          }
+        }
+        // JS资源重试
+        function handleReloadJSResource(url) {
+          // 已尝试过一次
+          if (RELOAD_JS_RESOURCE) {
+            return;
+          }
+          if (url.indexOf('vue.min.js') > -1) {
+            var reloadVueUrl = getReloadUrl('vue.min.js');
+            var reloadBundleUrl = getReloadUrl('index.bundle.js');
+            loadScript(reloadVueUrl, function(err, script) {
+              if (err) {
+                window.g_aegis && window.g_aegis.reportTime({
+                  name: 'reloadVuefails',
+                  duration: 500
+                });
+                console.error('JS Resource fails.', reloadVueUrl);
+              } else {
+                window.g_aegis && window.g_aegis.reportTime({
+                  name: 'reloadVueSuccess',
+                  duration: 200
+                });
+                console.log('JS Resource success.', reloadVueUrl);
+                // 等待 vue 加载完成后，在重试 bundle
+                loadScript(reloadBundleUrl, function(err, script) {
+                  if (err) {
+                    window.g_aegis && window.g_aegis.reportTime({
+                      name: 'reloadVueAndIndexBundleFails',
+                      duration: 500
+                    });
+                    console.error('JS Resource fails.', reloadBundleUrl);
+                  } else {
+                    window.g_aegis && window.g_aegis.reportTime({
+                      name: 'reloadVueAndIndexBundleSuccess',
+                      duration: 200
+                    });
+                    console.log('JS Resource success.', reloadBundleUrl);
+                  }
+                });
+              }
+            });
+            RELOAD_JS_RESOURCE = true;
+            return;
+          }
+          // 仅 bundle 失败
+          if (url && url.indexOf('index.bundle.js') > -1) {
+            var reloadBundleUrl = getReloadUrl('index.bundle.js');
+            loadScript(reloadBundleUrl, function(err, script) {
+              if (err) {
+                window.g_aegis && window.g_aegis.reportTime({
+                  name: 'reloadIndexBundleFails',
+                  duration: 500
+                });
+                console.error('JS Resource fails.', reloadBundleUrl);
+              } else {
+                window.g_aegis && window.g_aegis.reportTime({
+                  name: 'reloadIndexBundleSuccess',
+                  duration: 200
+                });
+                console.log('JS Resource success.', reloadBundleUrl);
+              }
+            });
+            RELOAD_JS_RESOURCE = true;
+          }
+        }
+        // CSS资源重试
+        function handleReloadCSSResource(url) {
+          if (RELOAD_CSS_RESOURCE) {
+            return;
+          }
+          if (url.indexOf('index.css') > -1) {
+            var styleUrl = getReloadUrl('index.css');
+            var headElement = document.head || document.getElementsByTagName('head')[0];
+            var linkElement = document.createElement('link');
+            linkElement.rel = 'stylesheet';
+            linkElement.href = styleUrl;
+            linkElement.onerror = function(e) {
+              window.g_aegis && window.g_aegis.reportTime({
+                name: 'reloadIndexCSSFails',
+                duration: 500
+              });
+              console.error('[handleReloadCSSResource] fails.', url, e);
+            }
+            linkElement.onload = function() {
+              window.g_aegis && window.g_aegis.reportTime({
+                name: 'reloadIndexCSSSuccess',
+                duration: 200
+              });
+              console.log('[handleReloadCSSResource] success', url);
+            }
+            headElement.appendChild(linkElement);
+            RELOAD_CSS_RESOURCE = true;
+          }
+        }
+      })();
+    </script>
+    
+        </head>
+        <body class="" ><script src="//npm.cdn-go.cn/vue/2.6.12/dist/vue.min.js"  defer></script><link rel="preload" href="https://security-web.cdn-go.cn/security-web/bdec8cd8/login_limit/page/index/index.css" as="style"><link rel="preload" href="https://security-web.cdn-go.cn/security-web/bdec8cd8/login_limit/page/index/index.bundle.js" as="script"><link rel="stylesheet" href="https://security-web.cdn-go.cn/security-web/bdec8cd8/login_limit/page/index/index.css"><div id="app" data-server-rendered="true"><div class="aq-app-topbar" data-v-399346ec><div class="aq-app-topbar__inner"><div class="aq-app-topbar-logo"></div><div class="aq-app-topbar-menu"><a href="https://kf.qq.com/product/zhzh.html#hid=2624" target="_blank" class="aq-app-topbar-menu__item">安全公告</a><span class="aq-app-topbar-menu__split"></span><a href="https://support.qq.com/products/36076" target="_blank" class="aq-app-topbar-menu__item">反馈问题</a><span class="aq-app-topbar-menu__split"></span><!----><a href="javascript:;" class="aq-app-topbar-menu__item">登录</a></div></div></div> <div class="main"><div class="container"><div><div class="container-title"><div class="container-title__split"></div> <div class="container-title__content">
+      账号解冻
+    </div></div> <div class="container-inner"><div class="input-area"><div class="input-area__title-main">
+        请输入无法登录的账号
+      </div> <div class="input-area__input qui-input"><!----><div class="qui-input__wrap"><input type="text" placeholder="QQ号/手机号/邮箱" autocomplete="on" value=""><!----><!----></div><!----></div> <div class="tips" style="margin-bottom:-8px;width:100%;display:none;"><span class="error"><i class="qui-icon-warning" style="font-size:14px;"></i> <span></span></span></div></div> <div class="btn-area" style="margin-top: 30px"><button disabled="disabled" class="btn-area__button qui-button qui-button_primary qui-button_large"><!----><div class="qui-button__inner"><!---->
+        下一步
+      </div></button></div></div></div> <!----> <!----> <!----> <!----> <!----> <!----> <!----> <!----></div></div> <div class="aq-footer"><div class="aq-footer__inner"><div class="aq-footer__menu"><a href="https://www.tencent.com/" target="_blank">关于腾讯</a>|<a href="https://www.tencent.com/en-us/" target="_blank">About Tencent</a>|<a href="https://ti.qq.com/agreement/index.html" target="_blank">服务条款</a>|<a href="http://www.qq.com/privacy.htm" target="_blank">隐私政策</a>|<a href="https://kf.qq.com/product/zhzh.html" target="_blank">帮助中心<span id="debug"></span></a></div><div class="aq-footer__logo"></div><div class="aq-footer__file"><div class="aq-footer__file-item">增值电信业务经营许可证：<a href="https://beian.miit.gov.cn/#/Integrated/index" target="_blank">粤B2-20090059</a></div><div class="aq-footer__file-item"><span class="aq-footer__file-icon"></span><a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=44030002000001" target="_blank">粤公网安备 44030002000001号</a></div></div><div class="aq-footer__copyright"> Copyright © 1998-2026 Tencent. All Rights Reserved. </div></div></div></div><script>window.__INITIAL_STATE__={"acceptLanguages":["zh_Hans"],"uin":"","step":1,"account":"","captchaToken":{"appid":2055428399},"guid":"","freezeDetail":{},"riskTicket":"","areaCode":"86","maskMobile":"","mobileInput":"","smsTickets":{},"uplinkSms":{},"resultKey":"","verifyType":2}</script><script src="https://security-web.cdn-go.cn/security-web/bdec8cd8/login_limit/page/index/index.bundle.js" defer></script>
+        <script> 
+          window.qPerformance.bodyEnd = Date.now() - window.qPerformance.headStart; 
+          window.g_aegis && window.g_aegis.reportTime({
+            name: 'bodyEnd',
+            duration: window.qPerformance.bodyEnd
+          })
+        </script>
+        <script src="https://framework.cdn-go.cn/q-opentelemetry/v1.1.1/index.min.js"></script>
+        <script>
+            var qopentelemetry = new QOpentelemetry({
+                tpsID: 'qq',
+                appName: 'qq-web',
+                traceUrl: 'https://tpstelemetry.tencent.com/v1/trace',
+                instrumentationOptions:{
+                    ignoreUrls: [
+                        /aegis.qq.com/,
+                    ],  // 不需要跟踪的cgi，暂时不忽略，全量上报
+                    propagateTraceHeaderCorsUrls: [
+                        /^https/,  // 需要注入traceparent头的cgi, 以与后台串联
+                    ],
+                }
+            })
+            
+        </script>
+        
+        
+        <script src="https://qq-web.cdn-go.cn/library/latest/qqapi/qqapi.wk-0.0.2.js"></script>
+    
+        <script src="https://ssl.captcha.qq.com/TCaptcha.js"></script>
+        
+        <script>
+          if(!window.mqq){
+              document.write([
+                  '<script src="https://qq-web.cdn-go.cn/library/latest/qqapi/qqapi.wk-0.0.2.js"><\/script>'
+              ])
+          }
+        </script>
+        <script> 
+          window.qPerformance.scriptEnd = Date.now() - window.qPerformance.headStart; 
+          window.g_aegis && window.g_aegis.reportTime({
+            name: 'scriptEnd',
+            duration: window.qPerformance.scriptEnd
+          })
+        </script>
+    </body>
+    </html>

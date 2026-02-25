@@ -184,8 +184,46 @@ class Orchestrator:
             final_html,
             original_url=base_url,
             resource_map=parse_result.resource_map,
+            response_cache=render_result.response_cache,
+            response_content_types=render_result.response_content_types,
         )
         storage.save_html(final_html, filename="index.html")
+        
+        # 保存 SPA 预渲染的路由页面到 pages/ 子目录
+        if render_result.route_htmls:
+            console.print(f"[dim]  💾 保存 {len(render_result.route_htmls)} 个 SPA 路由页面到 pages/ 目录...[/]")
+            for route_path, route_html in render_result.route_htmls.items():
+                if route_path == "/":
+                    continue  # 首页已保存
+                
+                # 生成文件名和子目录结构
+                # /home -> pages/home/index.html
+                # /product/pricing -> pages/product/pricing/index.html
+                # /blog/article-name -> pages/blog/article-name/index.html
+                route_parts = route_path.strip("/").split("/")
+                if len(route_parts) == 1:
+                    # 单级路径: /home -> pages/home/index.html
+                    subdir = f"pages/{route_parts[0]}"
+                    filename = "index.html"
+                else:
+                    # 多级路径: /product/pricing -> pages/product/pricing/index.html
+                    subdir = f"pages/{'/'.join(route_parts)}"
+                    filename = "index.html"
+                
+                # 解析并修复资源路径（使用相对于子目录的路径）
+                route_parse_result = parser.parse(route_html, current_page_local_path=f"{subdir}/{filename}")
+                route_final_html = self._fix_dedup_paths(
+                    route_parse_result.html, download_results, route_parse_result.resource_map
+                )
+                route_final_html = inject_runtime_resource_map(
+                    route_final_html,
+                    original_url=render_result.final_url + route_path,
+                    resource_map=route_parse_result.resource_map,
+                    response_cache=render_result.response_cache,
+                    response_content_types=render_result.response_content_types,
+                )
+                storage.save_html(route_final_html, filename=f"{subdir}/{filename}")
+        
         storage.print_tree()
 
         elapsed = time.time() - start_time

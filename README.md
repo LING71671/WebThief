@@ -6,8 +6,8 @@ High-fidelity website cloning tool for modern JS-heavy pages (SPA/CSR), with off
 
 ## Overview | 项目简介
 
-- EN: WebThief renders pages in Chromium (Playwright), captures runtime resources, rewrites paths, and outputs a runnable local mirror.
-- 中文：WebThief 通过 Playwright Chromium 渲染页面，捕获运行时资源并重写路径，输出可运行的本地镜像站点。
+- EN: WebThief renders pages in Chromium (Playwright), captures runtime resources, rewrites paths, and outputs a runnable local mirror with a v1.0 Runtime Replay Engine.
+- 中文：WebThief 通过 Playwright Chromium 渲染页面，捕获运行时资源并重写路径，输出包含 v1.0 运行时兼容层（Runtime Shim）的可执行镜像站点。
 
 ## Features | 核心特性
 
@@ -23,6 +23,16 @@ High-fidelity website cloning tool for modern JS-heavy pages (SPA/CSR), with off
 - 中文：可选登录暂停与加密会话缓存
 - EN: Optional QR/menu intercept capabilities for advanced dynamic pages
 - 中文：可选二维码/菜单拦截能力，适配复杂动态页面
+- EN: Adaptive Interaction Engine (viewport activation + DOM settle monitoring)
+- 中文：自适应交互引擎（视口激活 + DOM 稳定监测）
+- EN: Network Response Mirroring (full XHR/fetch offline replay)
+- 中文：网络响应镜像化（全量 XHR/fetch 离线重放）
+- **NEW** EN: Tech Stack Analysis (detect 50+ frameworks/libraries)
+- **NEW** 中文：技术栈分析（检测 50+ 框架/库）
+- **NEW** EN: SPA Route Prerendering (Angular/React/Vue Router)
+- **NEW** 中文：SPA 路由预渲染（支持 Angular/React/Vue Router）
+- **NEW** EN: Dynamic Import Extraction (lazy-loaded JS modules)
+- **NEW** 中文：动态导入提取（懒加载 JS 模块）
 
 ## Install | 安装
 
@@ -78,10 +88,12 @@ webthief https://example.com --auth-mode manual-pause --session-cache
 
 ```text
 Renderer (Playwright)
+  -> Viewport Activation (Scroll/Resize/Wheel events)
+  -> DOM Settle Monitoring (MutationObserver)
   -> Sanitizer (CSP/SW/tracker cleanup)
-  -> Parser/Rewriter (AST)
-  -> Downloader (async + dedup)
-  -> Storage
+  -> Parser/Rewriter (AST level)
+  -> Downloader (async + SHA256 dedup)
+  -> Storage (Runtime Shim v1.0 Injection)
 ```
 
 ## Docs | 文档

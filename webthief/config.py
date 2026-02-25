@@ -334,6 +334,57 @@ RUNTIME_SHIM_JS = """
         return '';
     }
 
+    function pushUnique(arr, value) {
+        if (!value || typeof value !== 'string') return;
+        if (arr.indexOf(value) === -1) {
+            arr.push(value);
+        }
+    }
+
+    function addLookupCandidates(target, rawValue) {
+        if (!rawValue || typeof rawValue !== 'string') return;
+        var value = rawValue.trim();
+        if (!value) return;
+
+        pushUnique(target, value);
+
+        var noHash = value.split('#')[0];
+        pushUnique(target, noHash);
+
+        var noQuery = noHash.split('?')[0];
+        pushUnique(target, noQuery);
+
+        try {
+            var parsed = new URL(noHash, ORIGINAL_ORIGIN);
+            var absolute = parsed.href;
+            pushUnique(target, absolute);
+
+            var absoluteNoHash = absolute.split('#')[0];
+            pushUnique(target, absoluteNoHash);
+
+            var absoluteNoQuery = absoluteNoHash.split('?')[0];
+            pushUnique(target, absoluteNoQuery);
+
+            var path = parsed.pathname || '/';
+            var pathWithQuery = parsed.search ? (path + parsed.search) : path;
+
+            pushUnique(target, pathWithQuery);
+            pushUnique(target, path);
+
+            if (pathWithQuery.startsWith('/')) {
+                var relWithQuery = pathWithQuery.slice(1);
+                pushUnique(target, relWithQuery);
+                pushUnique(target, './' + relWithQuery);
+            }
+
+            if (path.startsWith('/')) {
+                var relPath = path.slice(1);
+                pushUnique(target, relPath);
+                pushUnique(target, './' + relPath);
+            }
+        } catch (e) {}
+    }
+
     function resolveMappedResource(input) {
         try {
             var resourceMap = window.__WEBTHIEF_RESOURCE_MAP__ || {};
@@ -344,21 +395,58 @@ RUNTIME_SHIM_JS = """
                 direct = input.url.trim();
             }
 
-            if (direct && resourceMap[direct]) return resourceMap[direct];
+            var candidates = [];
             if (direct) {
-                var directNoHash = direct.split('#')[0];
-                if (resourceMap[directNoHash]) return resourceMap[directNoHash];
+                addLookupCandidates(candidates, direct);
             }
 
             var absolute = toAbsoluteRequestUrl(input);
-            if (!absolute) return '';
-            if (resourceMap[absolute]) return resourceMap[absolute];
+            if (absolute) {
+                addLookupCandidates(candidates, absolute);
+            }
 
-            var withoutHash = absolute.split('#')[0];
-            if (resourceMap[withoutHash]) return resourceMap[withoutHash];
+            for (var i = 0; i < candidates.length; i++) {
+                var candidate = candidates[i];
+                if (candidate && resourceMap[candidate]) {
+                    return resourceMap[candidate];
+                }
+            }
+
             return '';
         } catch (e) {
             return '';
+        }
+    }
+
+    function resolveCachedResponse(input) {
+        try {
+            var responseMap = window.__WEBTHIEF_RESPONSE_MAP__ || {};
+            var direct = '';
+            if (typeof input === 'string') {
+                direct = input.trim();
+            } else if (input && typeof input.url === 'string') {
+                direct = input.url.trim();
+            }
+
+            var candidates = [];
+            if (direct) {
+                addLookupCandidates(candidates, direct);
+            }
+
+            var absolute = toAbsoluteRequestUrl(input);
+            if (absolute) {
+                addLookupCandidates(candidates, absolute);
+            }
+
+            for (var i = 0; i < candidates.length; i++) {
+                var candidate = candidates[i];
+                if (candidate && responseMap[candidate]) {
+                    return responseMap[candidate];
+                }
+            }
+            return null;
+        } catch (e) {
+            return null;
         }
     }
 
@@ -520,17 +608,37 @@ RUNTIME_SHIM_JS = """
     var _origFetch = window.fetch;
     if (typeof _origFetch === 'function') {
         window.fetch = function(input, init) {
+            var cached = resolveCachedResponse(input);
+            if (cached && typeof cached.body === 'string' && typeof Response !== 'undefined') {
+                try {
+                    return Promise.resolve(
+                        new Response(cached.body, {
+                            status: 200,
+                            headers: {
+                                'Content-Type': cached.contentType || 'application/json'
+                            }
+                        })
+                    );
+                } catch (e) {}
+            }
+
             var mapped = resolveMappedResource(input);
             if (mapped) {
-                if (typeof Request !== 'undefined' && input instanceof Request) {
-                    try {
-                        var replaced = new Request(mapped, input);
-                        return _origFetch.call(this, replaced, init);
-                    } catch (e) {
-                        return _origFetch.call(this, mapped, init);
+                // 本地镜像资源统一按 GET 读取，避免原请求 method/body 导致离线失败
+                var nextInit = {};
+                if (init && typeof init === 'object') {
+                    for (var k in init) {
+                        nextInit[k] = init[k];
                     }
                 }
-                return _origFetch.call(this, mapped, init);
+                nextInit.method = 'GET';
+                if ('body' in nextInit) {
+                    try { delete nextInit.body; } catch (e) { nextInit.body = undefined; }
+                }
+                if (!nextInit.credentials) {
+                    nextInit.credentials = 'same-origin';
+                }
+                return _origFetch.call(this, mapped, nextInit);
             }
             return _origFetch.apply(this, arguments);
         };
@@ -538,12 +646,92 @@ RUNTIME_SHIM_JS = """
 
     if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
         var _origXHROpen = window.XMLHttpRequest.prototype.open;
+        var _origXHRSend = window.XMLHttpRequest.prototype.send;
+        function defineReadonlyProp(obj, key, value) {
+            try {
+                Object.defineProperty(obj, key, { value: value, configurable: true });
+            } catch (e) {
+                try { obj[key] = value; } catch (e2) {}
+            }
+        }
+        function triggerXHRCallbacks(xhr) {
+            try {
+                if (typeof xhr.onreadystatechange === 'function') {
+                    xhr.onreadystatechange();
+                }
+            } catch (e) {}
+            try {
+                if (typeof xhr.onload === 'function') {
+                    xhr.onload();
+                }
+            } catch (e) {}
+            try {
+                if (typeof xhr.dispatchEvent === 'function') {
+                    xhr.dispatchEvent(new Event('readystatechange'));
+                    xhr.dispatchEvent(new Event('load'));
+                    xhr.dispatchEvent(new Event('loadend'));
+                }
+            } catch (e) {}
+        }
         window.XMLHttpRequest.prototype.open = function(method, url) {
+            var cachedPayload = resolveCachedResponse(url);
+            this.__webthief_cached_payload__ = cachedPayload;
+            this.__webthief_cached_content_type__ = (
+                cachedPayload && cachedPayload.contentType
+            ) ? cachedPayload.contentType : 'application/json';
+            this.__webthief_original_url__ = url;
             var mapped = resolveMappedResource(url);
             if (mapped) {
+                arguments[0] = 'GET';
                 arguments[1] = mapped;
+                this.__webthief_mapped_local__ = true;
+            } else {
+                this.__webthief_mapped_local__ = false;
             }
             return _origXHROpen.apply(this, arguments);
+        };
+        window.XMLHttpRequest.prototype.send = function(body) {
+            if (this.__webthief_cached_payload__ && typeof this.__webthief_cached_payload__.body === 'string') {
+                var payload = this.__webthief_cached_payload__;
+                var contentType = this.__webthief_cached_content_type__ || 'application/json';
+                var xhr = this;
+                setTimeout(function() {
+                    var bodyText = String(payload.body || '');
+                    defineReadonlyProp(xhr, 'readyState', 4);
+                    defineReadonlyProp(xhr, 'status', 200);
+                    defineReadonlyProp(xhr, 'statusText', 'OK');
+                    defineReadonlyProp(xhr, 'responseText', bodyText);
+                    defineReadonlyProp(xhr, 'responseURL', String(xhr.__webthief_original_url__ || ''));
+
+                    var responseValue = bodyText;
+                    try {
+                        if (xhr.responseType === 'json') {
+                            responseValue = JSON.parse(bodyText);
+                        }
+                    } catch (e) {
+                        responseValue = null;
+                    }
+                    defineReadonlyProp(xhr, 'response', responseValue);
+
+                    xhr.getResponseHeader = function(name) {
+                        if (!name) return null;
+                        if (String(name).toLowerCase() === 'content-type') {
+                            return contentType;
+                        }
+                        return null;
+                    };
+                    xhr.getAllResponseHeaders = function() {
+                        return 'content-type: ' + contentType + '\\r\\n';
+                    };
+                    triggerXHRCallbacks(xhr);
+                }, 0);
+                return;
+            }
+
+            if (this.__webthief_mapped_local__) {
+                return _origXHRSend.call(this, null);
+            }
+            return _origXHRSend.apply(this, arguments);
         };
     }
 
@@ -558,6 +746,79 @@ RUNTIME_SHIM_JS = """
             try { return _origReplaceState.apply(this, arguments); } catch(e) {}
         };
     } catch(e) {}
+
+    // ── 10. ES Module 动态导入补丁 ──
+    // 修复 file:// 协议下 import() CORS 错误
+    // 注意：JS 文件中的 import() 已被替换为 __webthief_import__()
+    (function() {
+        if (typeof window === 'undefined') return;
+        
+        // 模块缓存，避免重复加载
+        window.__webthief_module_cache__ = window.__webthief_module_cache__ || {};
+        
+        // 自定义导入函数
+        window.__webthief_import__ = function(specifier) {
+            return new Promise(function(resolve, reject) {
+                // 如果已经在缓存中，直接返回
+                if (window.__webthief_module_cache__[specifier]) {
+                    return resolve(window.__webthief_module_cache__[specifier]);
+                }
+                
+                // 处理相对路径，转换为本地路径
+                var url = specifier;
+                if (url.startsWith('./') || url.startsWith('../')) {
+                    // 尝试通过本地资源映射解析
+                    var mapped = resolveMappedResource(url);
+                    if (mapped) {
+                        url = mapped;
+                    }
+                }
+                
+                // 使用 fetch + eval 方式加载模块
+                fetch(url)
+                    .then(function(response) {
+                        if (!response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+                        return response.text();
+                    })
+                    .then(function(code) {
+                        // 包装为模块格式
+                        var moduleExports = {};
+                        var moduleContext = {
+                            exports: moduleExports,
+                            __esModule: true,
+                            default: {}
+                        };
+                        
+                        try {
+                            // 使用 Function 构造器执行代码
+                            var wrappedCode = '(function(module, exports, __webpack_require__) {\\n' + code + '\\n})(moduleContext, moduleExports, window.__webpack_require__);';
+                            var fn = new Function('moduleContext', 'moduleExports', wrappedCode);
+                            fn(moduleContext, moduleExports);
+                            
+                            // 缓存并返回
+                            var result = moduleExports.default || moduleExports;
+                            window.__webthief_module_cache__[specifier] = result;
+                            resolve(result);
+                        } catch (e) {
+                            console.warn('[WebThief Shim] 模块执行错误:', specifier, e);
+                            // 返回空对象，避免应用崩溃
+                            var emptyModule = { default: {} };
+                            window.__webthief_module_cache__[specifier] = emptyModule;
+                            resolve(emptyModule);
+                        }
+                    })
+                    .catch(function(err) {
+                        console.warn('[WebThief Shim] 模块加载失败:', specifier, err);
+                        // 返回空对象，避免应用崩溃
+                        var emptyModule = { default: {} };
+                        window.__webthief_module_cache__[specifier] = emptyModule;
+                        resolve(emptyModule);
+                    });
+            });
+        };
+    })();
 
     console.log('[WebThief Shim] 运行时兼容层已激活');
 })();

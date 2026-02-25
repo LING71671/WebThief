@@ -57,11 +57,10 @@ def sanitize(html: str, original_url: str = "", keep_js: bool = False,
     _remove_preconnect(soup)
     _remove_nonce_attrs(soup)
 
-    # 新增：SPA 框架启动脚本剥离（无论是否 keep_js 都执行）
-    _neutralize_spa_scripts(soup)
-
-    # 新增：JS 中和（除非 --keep-js）
+    # keep-js 模式下要保留运行时链路，否则会导致整站交互/动效失效。
+    # 仅在 neutralize-js 模式执行 SPA 启动脚本剥离与脚本中和。
     if not keep_js:
+        _neutralize_spa_scripts(soup)
         _neutralize_scripts(soup)
 
     # 新增：注入运行时兼容层
@@ -82,6 +81,8 @@ def inject_runtime_resource_map(
     html: str,
     original_url: str,
     resource_map: dict[str, str],
+    response_cache: dict[str, bytes] | None = None,
+    response_content_types: dict[str, str] | None = None,
 ) -> str:
     """
     注入资源映射脚本，供运行时 fetch/XHR 使用本地镜像资源。
@@ -95,7 +96,13 @@ def inject_runtime_resource_map(
         return html
 
     soup = BeautifulSoup(html, "lxml")
-    _inject_resource_map_script(soup, original_url, resource_map)
+    _inject_resource_map_script(
+        soup,
+        original_url,
+        resource_map,
+        response_cache=response_cache or {},
+        response_content_types=response_content_types or {},
+    )
     return str(soup)
 
 
@@ -349,10 +356,49 @@ def _inject_resource_map_script(
     soup: BeautifulSoup,
     original_url: str,
     resource_map: dict[str, str],
+    response_cache: dict[str, bytes] | None = None,
+    response_content_types: dict[str, str] | None = None,
 ) -> None:
     """注入运行时资源映射（供 shim 的 fetch/XHR 代理使用）"""
     if not resource_map:
         return
+
+    response_cache = response_cache or {}
+    response_content_types = response_content_types or {}
+
+    def add_aliases(mapping: dict, absolute: str, value) -> None:
+        mapping[absolute] = value
+
+        parsed = urlparse(absolute)
+        path = parsed.path or "/"
+        if path:
+            mapping.setdefault(path, value)
+            if path.startswith("/"):
+                rel_path = path.lstrip("/")
+                if rel_path:
+                    mapping.setdefault(rel_path, value)
+                    mapping.setdefault(f"./{rel_path}", value)
+
+        if parsed.query and path:
+            with_query = f"{path}?{parsed.query}"
+            mapping.setdefault(with_query, value)
+            if with_query.startswith("/"):
+                rel_query = with_query.lstrip("/")
+                if rel_query:
+                    mapping.setdefault(rel_query, value)
+                    mapping.setdefault(f"./{rel_query}", value)
+
+            without_query = urlunparse(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path or "/",
+                    parsed.params,
+                    "",
+                    "",
+                )
+            )
+            mapping.setdefault(without_query, value)
 
     normalized_map: dict[str, str] = {}
     for raw_url, local_path in resource_map.items():
@@ -364,44 +410,68 @@ def _inject_resource_map_script(
             continue
 
         local_ref = f"./{local_path}"
-        normalized_map[absolute] = local_ref
-
-        # 兼容脚本里常见的相对路径写法（/img/a.png、img/a.png、./img/a.png）
-        parsed = urlparse(absolute)
-        path = parsed.path or "/"
-        if path:
-            normalized_map.setdefault(path, local_ref)
-            if path.startswith("/"):
-                rel_path = path.lstrip("/")
-                if rel_path:
-                    normalized_map.setdefault(rel_path, local_ref)
-                    normalized_map.setdefault(f"./{rel_path}", local_ref)
-
-        if parsed.query and path:
-            with_query = f"{path}?{parsed.query}"
-            normalized_map.setdefault(with_query, local_ref)
-            if with_query.startswith("/"):
-                rel_query = with_query.lstrip("/")
-                if rel_query:
-                    normalized_map.setdefault(rel_query, local_ref)
-                    normalized_map.setdefault(f"./{rel_query}", local_ref)
-
-        # 一些请求会省略 query，补一个无 query 的兜底键
-        if parsed.query:
-            without_query = urlunparse(
-                (
-                    parsed.scheme,
-                    parsed.netloc,
-                    parsed.path or "/",
-                    parsed.params,
-                    "",
-                    "",
-                )
-            )
-            normalized_map.setdefault(without_query, local_ref)
+        add_aliases(normalized_map, absolute, local_ref)
 
     if not normalized_map:
         return
+
+    # 将抓取阶段捕获到的文本 API 响应内联到运行时，避免 file:// 场景下 fetch/XHR 失败导致动态区块空白
+    response_map: dict[str, dict[str, str]] = {}
+    max_entries = 120
+    max_total_chars = 2_000_000
+    payload_entries = 0
+    total_chars = 0
+    for raw_url, body in response_cache.items():
+        if payload_entries >= max_entries:
+            break
+        if not isinstance(raw_url, str) or not isinstance(body, (bytes, bytearray)):
+            continue
+        if len(body) > 200 * 1024:
+            continue
+
+        absolute = normalize_url(raw_url, original_url)
+        if not absolute or should_skip_url(absolute):
+            continue
+
+        try:
+            text = body.decode("utf-8")
+        except Exception:
+            try:
+                text = body.decode("utf-8", errors="ignore")
+            except Exception:
+                continue
+
+        if not text.strip():
+            continue
+        if total_chars + len(text) > max_total_chars:
+            continue
+
+        content_type = (
+            (response_content_types.get(absolute) or "").split(";")[0].strip().lower()
+        )
+        stripped = text.lstrip()
+        is_json_like = stripped.startswith("{") or stripped.startswith("[")
+
+        # 排除 HTML 页面内容 - 不应该将页面本身缓存为 API 响应
+        if content_type.startswith("text/html") or stripped.startswith("<!doctype html>") or stripped.startswith("<html"):
+            continue
+
+        if not (
+            content_type.startswith("application/json")
+            or "json" in content_type
+            or content_type.startswith("text/")
+            or "javascript" in content_type
+            or is_json_like
+        ):
+            continue
+
+        payload = {
+            "body": text,
+            "contentType": content_type or ("application/json" if is_json_like else "text/plain"),
+        }
+        add_aliases(response_map, absolute, payload)
+        payload_entries += 1
+        total_chars += len(text)
 
     parsed_original = urlparse(original_url or "")
     origin = (
@@ -410,15 +480,25 @@ def _inject_resource_map_script(
         else ""
     )
 
-    script_content = (
-        "(function(){\n"
-        f"  window.__WEBTHIEF_ORIGIN__ = {json.dumps(origin, ensure_ascii=False)};\n"
-        "  var existing = window.__WEBTHIEF_RESOURCE_MAP__ || {};\n"
-        f"  var incoming = {json.dumps(normalized_map, ensure_ascii=False, separators=(',', ':'))};\n"
-        "  for (var k in incoming) { existing[k] = incoming[k]; }\n"
-        "  window.__WEBTHIEF_RESOURCE_MAP__ = existing;\n"
-        "})();"
-    )
+    script_lines = [
+        "(function(){",
+        f"  window.__WEBTHIEF_ORIGIN__ = {json.dumps(origin, ensure_ascii=False)};",
+        "  var existing = window.__WEBTHIEF_RESOURCE_MAP__ || {};",
+        f"  var incoming = {json.dumps(normalized_map, ensure_ascii=False, separators=(',', ':'))};",
+        "  for (var k in incoming) { existing[k] = incoming[k]; }",
+        "  window.__WEBTHIEF_RESOURCE_MAP__ = existing;",
+    ]
+    if response_map:
+        script_lines.extend(
+            [
+                "  var existingResp = window.__WEBTHIEF_RESPONSE_MAP__ || {};",
+                f"  var incomingResp = {json.dumps(response_map, ensure_ascii=False, separators=(',', ':'))};",
+                "  for (var rk in incomingResp) { existingResp[rk] = incomingResp[rk]; }",
+                "  window.__WEBTHIEF_RESPONSE_MAP__ = existingResp;",
+            ]
+        )
+    script_lines.append("})();")
+    script_content = "\n".join(script_lines)
 
     script_tag = soup.new_tag(
         "script",

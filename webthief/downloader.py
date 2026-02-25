@@ -213,6 +213,11 @@ class Downloader:
 
         file_path = output_dir / local_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 如果是 JS 文件，替换动态导入
+        if local_path.lower().endswith('.js'):
+            content = self._patch_js_dynamic_import(content)
+        
         file_path.write_bytes(content)
 
         self.hash_map[sha] = local_path
@@ -314,6 +319,11 @@ class Downloader:
                 file_path = output_dir / final_local_path
 
         file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 如果是 JS 文件，替换动态导入
+        if final_local_path.lower().endswith('.js'):
+            content = self._patch_js_dynamic_import(content)
+        
         file_path.write_bytes(content)
 
         self.hash_map[sha] = final_local_path
@@ -324,6 +334,21 @@ class Downloader:
         result.sha256 = sha
         self.total_downloaded += 1
         self.total_bytes += len(content)
+
+    def _patch_js_dynamic_import(self, content: bytes) -> bytes:
+        """将 JS 中的 import() 替换为 __webthief_import__()"""
+        try:
+            text = content.decode('utf-8', errors='replace')
+            # 替换动态导入：import("xxx") -> __webthief_import__("xxx")
+            import re
+            patched = re.sub(
+                r'\bimport\s*\(\s*(["\'])([^"\']+\.js(?:\?[^"\'\s]*)?)\1\s*\)',
+                r'__webthief_import__(\1\2\1)',
+                text
+            )
+            return patched.encode('utf-8')
+        except Exception:
+            return content
 
     def _apply_dedup_if_exists(
         self,

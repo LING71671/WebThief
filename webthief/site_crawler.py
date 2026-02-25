@@ -76,6 +76,7 @@ class SiteCrawler:
             self.start_url: url_to_local_page_path(self.start_url, self.start_host)
         }
         self.auth_pauses = 0
+        self.tech_stack_cache: dict[str, dict] = {}
 
         self.storage_state: dict | None = None
         self.downloader = Downloader(
@@ -184,11 +185,17 @@ class SiteCrawler:
             final_html,
             original_url=base_url,
             resource_map=parse_result.resource_map,
+            response_cache=render_result.response_cache,
+            response_content_types=render_result.response_content_types,
         )
         self.storage.save_html(final_html, filename=current_local_path)
 
         discovered_links = set(parse_result.page_links) | set(render_result.page_links)
         self._enqueue_links(discovered_links, base_url)
+        
+        if render_result.tech_stack:
+            self.tech_stack_cache[current_url] = render_result.tech_stack
+        
         return "ok", len(discovered_links)
 
     async def _render_with_auth(self, current_url: str):
@@ -483,6 +490,13 @@ class SiteCrawler:
         return html
 
     def _build_report(self) -> dict:
+        aggregated_tech: dict[str, dict] = {}
+        for url, tech_data in self.tech_stack_cache.items():
+            for tech in tech_data.get("technologies", []):
+                name = tech.get("name", "")
+                if name and name not in aggregated_tech:
+                    aggregated_tech[name] = tech
+        
         return {
             "start_url": self.start_url,
             "host": self.start_host,
@@ -499,6 +513,12 @@ class SiteCrawler:
                 "deduplicated": self.downloader.total_skipped,
                 "failed": self.downloader.total_failed,
                 "bytes": self.downloader.total_bytes,
+            },
+            "tech_stack": {
+                "technologies": list(aggregated_tech.values()),
+                "is_spa": any(t.get("is_spa", False) for t in self.tech_stack_cache.values()),
+                "is_ssr": any(t.get("is_ssr", False) for t in self.tech_stack_cache.values()),
+                "has_animation": any(t.get("has_animation", False) for t in self.tech_stack_cache.values()),
             },
         }
 

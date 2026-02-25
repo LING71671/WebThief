@@ -1,8 +1,109 @@
-﻿# WebThief 版本日志 (CHANGELOG)
+# WebThief 版本日志 (CHANGELOG)
 
-> 文档维护更新（2026-02-24）：已清理仓库测试脚本与测试产物目录，本文档内容已同步调整。
+> 文档维护更新（2026-02-26）：新增技术栈分析与 SPA 路由预渲染功能。
 
-## v3.0.2 (2026-02-25) - 文档精简与忽略规则整理
+## v3.2.0 (2026-02-26) - 技术栈分析与 SPA 预渲染版 (Tech Stack Analysis & SPA Prerendering)
+
+### 🚀 核心新功能
+
+#### 🔍 技术栈分析 (Tech Stack Analysis)
+- **自动技术检测**：
+    - 支持 50+ 技术指纹检测（前端框架、UI 库、动画库、CMS、CDN 等）
+    - 检测 Angular、React、Vue.js、Bootstrap、GSAP、Three.js 等主流技术
+    - 三种检测方式：URL 模式匹配、HTTP 响应头分析、DOM 结构检测
+- **智能渲染策略**：
+    - 根据检测到的技术栈自动调整渲染参数
+    - SPA 框架 → 启用路由预渲染
+    - SSR 框架 → 增加 hydration 等待时间
+    - 动画库 → 启用滚动触发动画
+- **CLI 可视化输出**：
+    - 美观的表格展示检测到的技术栈
+    - 显示置信度和检测证据
+    - 提供渲染策略建议
+
+#### 🔄 SPA 路由预渲染 (SPA Route Prerendering)
+- **框架支持**：
+    - Angular：自动提取路由配置，预渲染所有路由状态
+    - React Router：支持 React/Vue Router 路由预渲染
+    - Vue Router：通用方案支持其他 SPA 框架
+- **目录结构优化**：
+    - 路由页面保存到 `pages/` 子目录
+    - 保持原始 URL 结构：`/home` → `pages/home/index.html`
+    - 多级路由支持：`/product/pricing` → `pages/product/pricing/index.html`
+- **资源路径修复**：
+    - 自动修复子目录中 HTML 的资源引用路径
+    - 确保所有路由页面资源加载正确
+
+#### 📦 动态导入提取 (Dynamic Import Extraction)
+- **JS 懒加载模块发现**：
+    - 提取 `import()` 动态导入的 JS 模块
+    - 支持 Vue.js、React 懒加载组件
+    - 自动下载并替换为本地路径
+
+### 🔧 架构改进
+- **新增模块**：
+    - `tech_analyzer.py` - 技术栈分析器
+    - `spa_prerender.py` - SPA 路由预渲染器
+- **渲染器增强**：
+    - 集成技术栈分析到渲染流程
+    - 支持 SPA 预渲染选项（`enable_spa_prerender`）
+    - 扩展 `RenderResult` 包含路由 HTML 集合
+- **下载器增强**：
+    - 支持 JS 动态导入模块提取
+    - 新增 `JS_DYNAMIC_IMPORT_RE` 正则表达式
+
+### 📚 文档更新
+- `README.md`：添加技术栈分析和 SPA 预渲染特性说明
+- `CHANGELOG.md`：记录 v3.2.0 版本变更
+
+### 🎯 适用场景
+- **SPA 克隆**：Angular、React、Vue 单页应用的完整克隆
+- **技术栈识别**：快速了解网站使用的技术栈
+- **离线文档**：将文档型 SPA 转换为静态多页站点
+
+### ⚠️ 已知限制
+- **WebGL/Canvas**：file:// 协议下部分 WebGL 功能受限，建议使用本地 HTTP 服务器
+- **动态路由**：某些动态生成的路由可能无法预渲染
+
+---
+
+## v3.1.0 (2026-02-26) - 运行时重放与自适应交互版 (Runtime Replay & Adaptive Interaction)
+
+这是一个重大性能与兼容性升级版本，将 WebThief 从静态镜像工具提升为“运行时环境重放”引擎。
+
+### 🚀 核心新功能
+
+#### 🔄 运行时兼容层 v1.0 (Runtime Shim v1.0)
+- **网络响应镜像化 (Network Response Mirroring)**：
+    - 自动拦截并缓存所有动态 API 调用（XHR/fetch）的 body 与 Content-Type。
+    - 将响应映射注入页面 `window.__WEBTHIEF_RESPONSE_MAP__`。
+    - 运行时 Shim 接管网络请求，实现真正的全动态站点离线运行（如 Next.js/Nuxt 水合）。
+- **Proxy 代理级位置欺骗 (Location Spoofing)**：
+    - 使用 JavaScript `Proxy` 深度伪装 `window.location`。
+    - 使脚本在 `file://` 或 `localhost` 下仍能看到原始域名的 `hostname` 与 `origin`。
+    - 绕过环境检测逻辑，防止克隆页因域名不匹配导致的报错或重定向。
+- **资源 Content-Type 还原**：
+    - 在镜像文件夹中不仅存储文件，还记录原始 MIME 类型，确保重放时浏览器以正确方式解析。
+
+#### 🧠 自适应交互引擎 (Adaptive Interaction Engine)
+- **视口激活预热 (Viewport Activation Preload)**：
+    - 弃用传统的匀速滚动，采用分段式视口激活。
+    - 自动分段触发 `scroll`、`resize`、`wheel` 事件，完美激活 `IntersectionObserver` 驱动的动效与懒加载。
+- **DOM 稳定监测 (DOM Settle Monitoring)**：
+    - 集成 `MutationObserver` 机制。
+    - 智能等待异步渲染和数据注入完成，直至 DOM 进入“寂静期”后再获取快照，大幅减少克隆页面的空白块和布局截断。
+- **技术栈自适应评分 (Adaptive Scoring)**：
+    - 自动探测 React/Next.js/Vue/Nuxt 等现代框架。
+    - 根据站点复杂度自动决定“激进预热”策略，在效率与高保真之间取得最佳平衡。
+
+### 🔧 架构与组件增强
+- **CSS 解析升级**：集成 `tinycss2` 进行更稳健的 CSS AST 解析，大幅提升复杂样式表中的资源提取成功率。
+- **JS 深度发现**：增强 `parse_external_js_assets`，能够发现硬编码在混淆 JS 文件中的图片与字体资源。
+- **下载器健壮性**：优化了 `_sync_resource_map_with_download_results`，更好地处理并发下载中的边缘失败情况。
+
+### 📚 文档更新
+- `README.md`：同步更新“高保真重放引擎”架构图与核心特性。
+- `ADVANCED_FEATURES.md`：详细记录“视口激活”与“运行时镜像”的技术实现细节及验证清单。
 
 ### 📝 文档结构调整
 - 保留核心文档：`README.md`、`ADVANCED_FEATURES.md`、`CHANGELOG.md`

@@ -818,9 +818,21 @@ def parse_external_css(
     return rewritten_css, new_resources, sub_css_urls
 
 
-# JS 字符串中常见的静态资源引用（用于补抓 script 里硬编码图片/字体）
+# JS 字符串中常见的静态资源引用（用于补抓 script 里硬编码图片/字体/JS模块）
 JS_ASSET_LITERAL_RE = re.compile(
     r"""(?P<q>['"])(?P<url>(?:(?:https?:)?//|/|\.{1,2}/|[A-Za-z0-9_-]+/)[^'"]+?\.(?:png|jpe?g|gif|webp|svg|ico|mp4|webm|mp3|ogg|wav|woff2?|ttf|otf|eot)(?:\?[^'"]*)?)(?P=q)""",
+    re.IGNORECASE,
+)
+
+# JS 动态导入模块（Vue/React 懒加载组件）
+JS_DYNAMIC_IMPORT_RE = re.compile(
+    r"""import\s*\(\s*['"](?P<url>\.?\.?/[^'"]+\.js(?:\?[^'"]*)?)['"]\s*\)""",
+    re.IGNORECASE,
+)
+
+# JS 字符串中的接口端点（用于补抓运行时请求的数据资源）
+JS_ENDPOINT_LITERAL_RE = re.compile(
+    r"""(?P<q>['"])(?P<url>(?:(?:https?:)?//|/|\.{1,2}/|[A-Za-z0-9_-]+/)[A-Za-z0-9/_\-.?=&%:+~#]{2,260}(?:api|ajax|dynamic|content|auth|login|qrcode|qr|session|token)[A-Za-z0-9/_\-.?=&%:+~#]*)(?P=q)""",
     re.IGNORECASE,
 )
 
@@ -843,10 +855,9 @@ def parse_external_js_assets(
     if parsed_js.scheme and parsed_js.netloc:
         site_origin = f"{parsed_js.scheme}://{parsed_js.netloc}"
 
-    for match in JS_ASSET_LITERAL_RE.finditer(js_text):
-        raw_url = (match.group("url") or "").strip()
+    def register_js_literal_url(raw_url: str) -> None:
         if not raw_url or should_skip_url(raw_url):
-            continue
+            return
 
         candidates: list[str] = []
         # JS 字面量里的资源路径，绝大多数是相对于站点根目录，而不是 JS 文件目录。
@@ -869,5 +880,15 @@ def parse_external_js_assets(
                 continue
             resource_map[absolute] = url_to_local_path(absolute, base_domain)
             new_resources[absolute] = resource_map[absolute]
+
+    for match in JS_ASSET_LITERAL_RE.finditer(js_text):
+        register_js_literal_url((match.group("url") or "").strip())
+
+    # 提取动态导入的 JS 模块（Vue/React 懒加载）
+    for match in JS_DYNAMIC_IMPORT_RE.finditer(js_text):
+        register_js_literal_url((match.group("url") or "").strip())
+
+    for match in JS_ENDPOINT_LITERAL_RE.finditer(js_text):
+        register_js_literal_url((match.group("url") or "").strip())
 
     return new_resources
