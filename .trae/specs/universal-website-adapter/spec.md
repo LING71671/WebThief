@@ -1,0 +1,138 @@
+# 通用网站适配器 Spec
+
+## Why
+
+WebThief 目前无法克隆某些类型的网站（WebGL 游戏、实时协作应用、需要复杂认证的网站等）。目标是提升 WebThief 的兼容性，使其能够处理更多类型的网站，同时保持代码简洁和可维护。
+
+## What Changes
+
+- **精简现有模块**：移除过度设计的部分，保留核心实用功能
+- **增强核心能力**：优化本地服务器、会话管理、安全处理
+- **改进检测机制**：智能识别网站类型并选择合适的克隆策略
+- **添加回退机制**：当完整克隆不可行时，提供降级方案
+
+## Impact
+
+- Affected specs: 所有网站克隆功能
+- Affected code: 
+  - `webthief/server/` - 精简并优化
+  - `webthief/session/` - 保留核心功能
+  - `webthief/security/` - 保留核心功能
+  - `webthief/api_simulator/` - 简化为基本缓存
+  - `webthief/websocket_proxy/` - 移除或延迟
+  - `webthief/browser_api/` - 移除或延迟
+  - `webthief/frontend/` - 移除或延迟
+  - `webthief/performance/` - 保留核心功能
+
+## ADDED Requirements
+
+### Requirement: 网站类型智能检测
+
+The system SHALL automatically detect website type and select appropriate cloning strategy.
+
+#### Scenario: 检测静态网站
+- **WHEN** user clones a static website
+- **THEN** the system SHALL use fast static download mode
+- **AND** skip unnecessary rendering steps
+
+#### Scenario: 检测 SPA 应用
+- **WHEN** user clones an SPA application
+- **THEN** the system SHALL enable SPA prerendering
+- **AND** extract all client-side routes
+
+#### Scenario: 检测需要认证的网站
+- **WHEN** user clones a website that requires login
+- **THEN** the system SHALL prompt for authentication
+- **AND** save session for future use
+
+#### Scenario: 检测 WebGL/Canvas 应用
+- **WHEN** user clones a WebGL/Canvas application
+- **THEN** the system SHALL automatically start local server
+- **AND** warn about potential limitations
+
+### Requirement: 降级克隆策略
+
+The system SHALL provide graceful degradation when full cloning is not possible.
+
+#### Scenario: WebGL 应用降级
+- **WHEN** WebGL features cannot be fully replicated
+- **THEN** the system SHALL download static assets
+- **AND** provide local server for basic viewing
+- **AND** document limitations in output
+
+#### Scenario: 实时功能降级
+- **WHEN** website uses WebSocket/WebRTC
+- **THEN** the system SHALL record initial state
+- **AND** skip real-time features
+- **AND** document limitations in output
+
+### Requirement: 一键本地服务器
+
+The system SHALL provide simple command to start local server for cloned website.
+
+#### Scenario: 启动本地服务器
+- **WHEN** user runs `webthief serve <output_dir>`
+- **THEN** the system SHALL start HTTP server
+- **AND** automatically open browser
+- **AND** show URL in console
+
+### Requirement: 依赖最小化
+
+The system SHALL minimize external dependencies.
+
+#### Scenario: 检查依赖
+- **WHEN** user installs WebThief
+- **THEN** the system SHALL only require essential dependencies
+- **AND** optional features can be installed separately
+
+## MODIFIED Requirements
+
+### Requirement: 精简模块结构
+
+**Existing**: 8 个新增模块，16,000+ 行代码
+
+**Modified**: 精简为 4 个核心模块
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| `server/` | 保留 | 核心功能，优化代码 |
+| `session/` | 保留 | 核心功能，保留加密存储 |
+| `security/` | 保留 | 核心功能，保留 CSP/指纹 |
+| `performance/` | 保留 | 核心功能，保留并发优化 |
+| `api_simulator/` | 简化 | 简化为基本响应缓存 |
+| `websocket_proxy/` | 移除 | 移至可选插件 |
+| `browser_api/` | 移除 | 移至可选插件 |
+| `frontend/` | 移除 | 移至可选插件 |
+
+## REMOVED Requirements
+
+### Requirement: WebSocket 代理完整实现
+
+**Reason**: 复杂度高，实际效果有限，大多数 WebSocket 消息难以有效回放
+
+**Migration**: 移至可选插件目录 `webthief/plugins/websocket/`
+
+### Requirement: 浏览器 API 完整模拟
+
+**Reason**: Service Worker/IndexedDB 模拟不完整，可能引入更多问题
+
+**Migration**: 移至可选插件目录 `webthief/plugins/browser_api/`
+
+### Requirement: 前端架构深度适配
+
+**Reason**: 微前端检测准确率有限，实际克隆效果提升不明显
+
+**Migration**: 移至可选插件目录 `webthief/plugins/frontend/`
+
+## 实用功能优先级
+
+| 优先级 | 功能 | 说明 |
+|--------|------|------|
+| P0 | 本地服务器 | 解决 WebGL/Canvas 问题 |
+| P0 | 会话管理 | 解决登录网站问题 |
+| P1 | 安全处理 | 绕过基本反爬虫 |
+| P1 | 性能优化 | 提升克隆速度 |
+| P2 | API 缓存 | 基本响应缓存 |
+| P3 | WebSocket | 可选插件 |
+| P3 | 浏览器 API | 可选插件 |
+| P3 | 前端适配 | 可选插件 |

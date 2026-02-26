@@ -43,3 +43,11 @@ test_output/
 *_rerun/
 nuist_test*/
 steam_v2/
+nanfu_test_v13/
+qq_output_v3/
+trae_output2/
+antigravity_clean/
+
+# Cache directories
+_video_frames/
+.webthief_cache/

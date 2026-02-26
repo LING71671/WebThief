@@ -1,0 +1,687 @@
+"""
+五层流水线编排器：
+串联 渲染 → 净化 → 解析重写 → 下载 → 存储
+并在站点模式下协调 BFS 递归抓取
+
+集成智能网站类型检测和克隆策略选择模块
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
+from .downloader import Downloader
+from ..parser import ParseResult, Parser, parse_external_css, parse_external_js_assets
+from ..interceptors import QRInterceptor
+from ..interceptors import ReactInterceptor
+from ..core.renderer import RenderResult, Renderer
+from .sanitizer import sanitize, inject_runtime_resource_map
+from ..session import SessionStore
+from .site_crawler import SiteCrawler
+from .storage import Storage
+
+# 新模块导入
+from ..server import ServerManager, ServerConfig
+from ..api_simulator import APISimulator
+from ..session import SessionManager
+from ..security import SecurityHandler
+from ..performance import PerformanceOptimizer
+
+# 智能检测与策略模块
+from ..detector import WebsiteTypeDetector, WebsiteTypeResult
+from ..strategy import StrategySelector, StrategyResult, LimitationsWriter
+
+console = Console()
+
+
+class Orchestrator:
+    """
+    克隆流水线编排器
+
+    流程：
+    1. 渲染层 — Playwright 渲染页面，嗅探资源
+    2. 净化层 — 清洗 CSP / Service Worker / 追踪器
+    3. 解析重写层 — AST 级提取资源引用并重写路径
+    4. 下载引擎 — 异步并发下载资源
+    5. 存储层 — 保存 HTML 和资源到本地目录
+    
+    集成智能检测与策略选择：
+    - WebsiteTypeDetector: 检测网站类型（SPA/静态/认证等）
+    - StrategySelector: 根据检测结果选择最优克隆策略
+    - LimitationsWriter: 生成限制说明文档
+    """
+
+    def __init__(
+        self,
+        url: str,
+        output_dir: str = "./webthief_output",
+        concurrency: int = 20,
+        timeout: int = 30,
+        delay: float = 0.1,
+        user_agent: str | None = None,
+        extra_wait: int = 0,
+        disable_js: bool = False,
+        keep_js: bool = False,
+        verbose: bool = False,
+        enable_qr_intercept: bool = True,
+        enable_react_intercept: bool = True,
+        crawl_site: bool = True,
+        max_pages: int = 5000,
+        auth_mode: str = "manual-pause",
+        session_cache: bool = True,
+        session_file: str | None = None,
+        headful_auth: bool = True,
+        # 新增参数
+        local_server: bool = False,
+        server_port: int = 8080,
+        enable_https: bool = False,
+        api_simulation: bool = False,
+        enable_security_handler: bool = False,
+        enable_performance_optimizer: bool = False,
+        # 动画相关参数
+        enable_mouse_simulation: bool = False,
+        enable_scroll_precision: bool = False,
+        enable_canvas_recording: bool = False,
+        enable_physics_capture: bool = False,
+        enable_animation_analyze: bool = False,
+    ):
+        self.url = url
+        self.output_dir = output_dir
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.delay = delay
+        self.user_agent = user_agent
+        self.extra_wait = extra_wait
+        self.disable_js = disable_js
+        self.keep_js = keep_js
+        self.verbose = verbose
+        self.enable_qr_intercept = enable_qr_intercept
+        self.enable_react_intercept = enable_react_intercept
+        self.crawl_site = crawl_site
+        self.max_pages = max_pages
+        self.auth_mode = auth_mode
+        self.session_cache = session_cache
+        self.session_file = session_file
+        self.headful_auth = headful_auth
+
+        # 新增参数
+        self.local_server = local_server
+        self.server_port = server_port
+        self.enable_https = enable_https
+        self.api_simulation = api_simulation
+        self.enable_security_handler = enable_security_handler
+        self.enable_performance_optimizer = enable_performance_optimizer
+
+        # 动画相关参数
+        self.enable_mouse_simulation = enable_mouse_simulation
+        self.enable_scroll_precision = enable_scroll_precision
+        self.enable_canvas_recording = enable_canvas_recording
+        self.enable_physics_capture = enable_physics_capture
+        self.enable_animation_analyze = enable_animation_analyze
+        
+        # 新模块实例（延迟初始化）
+        self._server_manager: ServerManager | None = None
+        self._api_simulator: APISimulator | None = None
+        self._session_manager: SessionManager | None = None
+        self._security_handler: SecurityHandler | None = None
+        self._performance_optimizer: PerformanceOptimizer | None = None
+        
+        # 智能检测与策略模块
+        self._website_detector: WebsiteTypeDetector | None = None
+        self._strategy_selector: StrategySelector | None = None
+        self._strategy_result: StrategyResult | None = None
+        self._website_type_result: WebsiteTypeResult | None = None
+
+    async def run(self) -> Path:
+        """执行克隆流程"""
+        start_time = time.time()
+        self._print_banner()
+
+        # 初始化新模块
+        self._initialize_new_modules()
+
+        storage = Storage(self.output_dir)
+        storage.initialize()
+
+        # 传递新模块配置到 Renderer
+        renderer = Renderer(
+            extra_wait=self.extra_wait,
+            user_agent=self.user_agent,
+            disable_js=self.disable_js,
+            enable_qr_intercept=self.enable_qr_intercept,
+            enable_react_intercept=self.enable_react_intercept,
+            freeze_animations=not self.keep_js,
+            prepare_runtime_replay=self.keep_js,
+            # 新模块传递
+            security_handler=self._security_handler,
+            session_manager=self._session_manager,
+            api_simulator=self._api_simulator,
+            # 智能检测与策略模块
+            website_detector=self._website_detector,
+            strategy_selector=self._strategy_selector,
+            # 动画相关参数
+            enable_mouse_simulation=self.enable_mouse_simulation,
+            enable_scroll_precision=self.enable_scroll_precision,
+            enable_canvas_recording=self.enable_canvas_recording,
+            enable_webgl_capture=self.enable_canvas_recording,  # WebGL 使用 Canvas 录制开关
+            enable_animation_analyze=self.enable_animation_analyze,
+        )
+
+        if self.crawl_site:
+            crawler = SiteCrawler(
+                start_url=self.url,
+                storage=storage,
+                renderer=renderer,
+                concurrency=self.concurrency,
+                timeout=self.timeout,
+                delay=self.delay,
+                max_pages=self.max_pages,
+                keep_js=self.keep_js,
+                verbose=self.verbose,
+                enable_qr_intercept=self.enable_qr_intercept,
+                enable_react_intercept=self.enable_react_intercept,
+                auth_mode=self.auth_mode,
+                session_cache=self.session_cache,
+                session_file=self.session_file,
+                headful_auth=self.headful_auth,
+            )
+            output_path = await crawler.run()
+            elapsed = time.time() - start_time
+            self._print_site_summary(elapsed)
+            
+            # 启动本地服务器（如果启用）
+            await self._start_local_server_if_enabled()
+            return output_path
+
+        output_path = await self._run_single_page(storage, renderer, start_time)
+        
+        # 启动本地服务器（如果启用）
+        await self._start_local_server_if_enabled()
+        return output_path
+
+    def _initialize_new_modules(self) -> None:
+        """初始化新模块实例"""
+        # 初始化会话管理器
+        if self.session_cache or self.session_file:
+            self._session_manager = SessionManager()
+
+        # 初始化 API 模拟器
+        if self.api_simulation:
+            cache_dir = Path(self.output_dir) / "api_cache"
+            self._api_simulator = APISimulator(cache_dir=cache_dir)
+            self._api_simulator.load_cache()
+            console.print("[cyan]  ✓ API 模拟器已初始化[/]")
+
+        # 初始化安全处理器
+        if self.enable_security_handler:
+            self._security_handler = SecurityHandler(
+                enable_fingerprint_rotation=True,
+                enable_human_behavior=True,
+            )
+            console.print("[cyan]  ✓ 安全处理器已初始化[/]")
+
+        # 初始化性能优化器
+        if self.enable_performance_optimizer:
+            cache_dir = Path(self.output_dir) / "performance_cache"
+            self._performance_optimizer = PerformanceOptimizer(
+                base_concurrency=self.concurrency,
+                cache_dir=cache_dir,
+                enable_cache=True,
+            )
+            self._performance_optimizer.start()
+            console.print("[cyan]  ✓ 性能优化器已初始化[/]")
+
+        # 初始化智能检测与策略模块（默认启用）
+        self._website_detector = WebsiteTypeDetector()
+        self._strategy_selector = StrategySelector()
+        console.print("[cyan]  ✓ 网站类型检测器已初始化[/]")
+        console.print("[cyan]  ✓ 克隆策略选择器已初始化[/]")
+
+    async def _start_local_server_if_enabled(self) -> None:
+        """如果启用，启动本地服务器"""
+        if not self.local_server:
+            return
+
+        console.print("\n[bold cyan]🚀 启动本地服务器...[/]")
+        
+        config = ServerConfig(
+            host="127.0.0.1",
+            port=self.server_port,
+            root_dir=self.output_dir,
+            enable_https=self.enable_https,
+            open_browser=True,
+            cors_enabled=True,
+        )
+        
+        self._server_manager = ServerManager(config)
+        
+        if await self._server_manager.start():
+            console.print(f"[green]  ✓ 本地服务器已启动: {self._server_manager.actual_url}[/]")
+            console.print("[dim]  按 Ctrl+C 停止服务器[/]")
+            
+            # 保持服务器运行
+            try:
+                await self._server_manager.serve_forever()
+            except asyncio.CancelledError:
+                pass
+        else:
+            console.print(f"[red]  ✗ 本地服务器启动失败: {self._server_manager.error_message}[/]")
+
+    async def _run_single_page(
+        self,
+        storage: Storage,
+        renderer: Renderer,
+        start_time: float,
+    ) -> Path:
+        """单页克隆流程（保留旧行为兼容）"""
+        storage_state = self._load_storage_state()
+
+        console.print("\n[bold yellow]━━━ 阶段 1/5: 渲染与资源嗅探 ━━━[/]")
+        render_result = await renderer.render(
+            self.url,
+            storage_state=storage_state,
+            headless=True,
+        )
+
+        # 保存网站类型检测结果
+        if render_result.website_type_result:
+            self._website_type_result = render_result.website_type_result
+
+        # 保存策略选择结果
+        if render_result.strategy_result:
+            self._strategy_result = render_result.strategy_result
+
+        if render_result.is_login_page:
+            render_result = await self._handle_single_page_auth(renderer, render_result)
+
+        console.print("\n[bold yellow]━━━ 阶段 2/5: HTML 净化 + JS 策略注入 ━━━[/]")
+        clean_html = self._sanitize_html(render_result)
+        console.print("[green]  ✓ HTML 净化 + 兼容层注入完成[/]")
+
+        console.print("\n[bold yellow]━━━ 阶段 3/5: AST 解析与路径重写 ━━━[/]")
+        base_url = render_result.final_url or self.url
+        parser = Parser(
+            base_url=base_url,
+            intercepted_urls=render_result.resource_urls,
+            page_link_mode="absolute",
+        )
+        parse_result = parser.parse(clean_html, current_page_local_path="index.html")
+
+        console.print("\n[bold yellow]━━━ 阶段 4/5: 高并发资源下载 ━━━[/]")
+        downloader = Downloader(
+            concurrency=self.concurrency,
+            timeout=self.timeout,
+            delay=self.delay,
+            cookies=render_result.cookies,
+            referer=base_url,
+            response_cache=render_result.response_cache,
+        )
+        download_results = await downloader.download_all(
+            parse_result.resource_map,
+            Path(self.output_dir),
+        )
+        self._sync_resource_map_with_download_results(
+            parse_result.resource_map, download_results
+        )
+
+        await self._deep_parse_css(parse_result, downloader, storage, base_url)
+        await self._deep_parse_js(parse_result, downloader, base_url)
+
+        console.print("\n[bold yellow]━━━ 阶段 5/5: 镜像存储 ━━━[/]")
+        final_html = self._fix_dedup_paths(
+            parse_result.html, download_results, parse_result.resource_map
+        )
+        final_html = inject_runtime_resource_map(
+            final_html,
+            original_url=base_url,
+            resource_map=parse_result.resource_map,
+            response_cache=render_result.response_cache,
+            response_content_types=render_result.response_content_types,
+        )
+        storage.save_html(final_html, filename="index.html")
+        
+        # 保存 SPA 预渲染的路由页面到 pages/ 子目录
+        if render_result.route_htmls:
+            console.print(f"[dim]  💾 保存 {len(render_result.route_htmls)} 个 SPA 路由页面到 pages/ 目录...[/]")
+            for route_path, route_html in render_result.route_htmls.items():
+                if route_path == "/":
+                    continue  # 首页已保存
+                
+                # 生成文件名和子目录结构
+                route_parts = route_path.strip("/").split("/")
+                if len(route_parts) == 1:
+                    subdir = f"pages/{route_parts[0]}"
+                    filename = "index.html"
+                else:
+                    subdir = f"pages/{'/'.join(route_parts)}"
+                    filename = "index.html"
+                
+                # 解析并修复资源路径
+                route_parse_result = parser.parse(route_html, current_page_local_path=f"{subdir}/{filename}")
+                route_final_html = self._fix_dedup_paths(
+                    route_parse_result.html, download_results, route_parse_result.resource_map
+                )
+                route_final_html = inject_runtime_resource_map(
+                    route_final_html,
+                    original_url=render_result.final_url + route_path,
+                    resource_map=route_parse_result.resource_map,
+                    response_cache=render_result.response_cache,
+                    response_content_types=render_result.response_content_types,
+                )
+                storage.save_html(route_final_html, filename=f"{subdir}/{filename}")
+        
+        # 生成限制说明文档（如果策略需要降级）
+        if self._strategy_result and self._strategy_result.has_limitations:
+            self._write_limitations_document(storage)
+        
+        storage.print_tree()
+
+        elapsed = time.time() - start_time
+        self._print_summary(elapsed, downloader, storage)
+        return storage.get_output_path()
+
+    def _write_limitations_document(self, storage: Storage) -> None:
+        """生成限制说明文档"""
+        if not self._strategy_result:
+            return
+        
+        writer = LimitationsWriter(Path(self.output_dir))
+        output_path = writer.write(self._strategy_result, self.url)
+        console.print(f"[yellow]  ⚠ 已生成限制说明文档: {output_path}[/]")
+
+    async def _handle_single_page_auth(
+        self,
+        renderer: Renderer,
+        render_result: RenderResult,
+    ) -> RenderResult:
+        """单页模式下的认证处理"""
+        if self.auth_mode == "skip":
+            console.print("[yellow]⚠ 检测到登录墙，按 --auth-mode=skip 继续输出当前页面[/]")
+            return render_result
+
+        if self.auth_mode == "import-session":
+            console.print("[yellow]⚠ 导入会话后仍检测到登录墙，继续输出当前页面[/]")
+            return render_result
+
+        if not self.headful_auth:
+            console.print("[yellow]⚠ 未启用 headful 认证，继续输出当前页面[/]")
+            return render_result
+
+        console.print("[bold yellow]⏸ 检测到登录墙，切换人工认证...[/]")
+        state = await renderer.manual_auth(self.url, storage_state=self._load_storage_state())
+        if state and self.session_cache:
+            self._save_storage_state(state)
+
+        return await renderer.render(
+            self.url,
+            storage_state=state,
+            headless=True,
+        )
+
+    def _sanitize_html(self, render_result: RenderResult) -> str:
+        qr_bridge_script = ""
+        if render_result.qr_data and self.enable_qr_intercept:
+            parsed = urlparse(render_result.final_url or self.url)
+            original_domain = f"{parsed.scheme}://{parsed.netloc}"
+            qr_bridge_script = QRInterceptor().generate_qr_bridge_script(original_domain)
+            console.print("[cyan]  🔐 生成二维码桥接脚本[/]")
+
+        menu_script = ""
+        if render_result.menu_css and self.enable_react_intercept:
+            menu_script = ReactInterceptor().generate_menu_preservation_script()
+            console.print("[cyan]  ⚛️  生成菜单保留脚本[/]")
+
+        js_mode = "保留" if self.keep_js else "中和"
+        console.print(f"[magenta]🧹 清洗 CSP / SW / 追踪器 | JS 模式: {js_mode}[/]")
+        return sanitize(
+            render_result.html,
+            original_url=render_result.final_url or self.url,
+            keep_js=self.keep_js,
+            qr_bridge_script=qr_bridge_script,
+            menu_script=menu_script,
+        )
+
+    def _load_storage_state(self) -> dict | None:
+        """加载会话状态"""
+        host = urlparse(self.url).netloc
+        if self.auth_mode == "import-session":
+            if not self.session_file:
+                return None
+            try:
+                data = json.loads(Path(self.session_file).read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else None
+            except Exception as e:
+                console.print(f"[yellow]⚠ 导入会话失败: {e}[/]")
+                return None
+
+        if not self.session_cache:
+            return None
+        return SessionStore().load(host, custom_path=self.session_file)
+
+    def _save_storage_state(self, state: dict) -> None:
+        host = urlparse(self.url).netloc
+        SessionStore().save(host, state, custom_path=self.session_file)
+
+    async def _deep_parse_css(
+        self,
+        parse_result: ParseResult,
+        downloader: Downloader,
+        storage: Storage,
+        base_url: str,
+    ) -> None:
+        """
+        深度解析已下载的 CSS 文件，提取并下载其中的子资源（字体、图片等）
+        """
+        base_domain = urlparse(base_url).netloc
+        css_urls = set(parse_result.css_sub_resources.keys())
+        processed_css = set()
+        iteration = 0
+        max_iterations = 5
+
+        while css_urls - processed_css and iteration < max_iterations:
+            iteration += 1
+            new_css_urls = set()
+
+            for css_url in css_urls - processed_css:
+                processed_css.add(css_url)
+
+                local_path = parse_result.resource_map.get(css_url) or parse_result.css_sub_resources.get(css_url)
+                if not local_path:
+                    continue
+
+                css_file = Path(self.output_dir) / local_path
+                if not css_file.exists():
+                    continue
+
+                try:
+                    css_text = css_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                _, new_resources, sub_css = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
+                )
+
+                if new_resources:
+                    if self.verbose:
+                        console.print(
+                            f"[dim]  🔗 CSS 子资源: {css_url} → {len(new_resources)} 个新资源[/]"
+                        )
+                    css_download_results = await downloader.download_all(
+                        new_resources, Path(self.output_dir)
+                    )
+                    self._sync_resource_map_with_download_results(
+                        parse_result.resource_map, css_download_results
+                    )
+
+                rewritten_css, _, _ = parse_external_css(
+                    css_text,
+                    css_url,
+                    parse_result.resource_map,
+                    base_domain,
+                    current_css_local_path=local_path,
+                )
+
+                storage.save_text(rewritten_css, local_path)
+                new_css_urls |= sub_css
+
+            css_urls = new_css_urls
+
+    async def _deep_parse_js(
+        self,
+        parse_result: ParseResult,
+        downloader: Downloader,
+        base_url: str,
+    ) -> None:
+        """
+        深度解析已下载 JS 文件，补抓其中硬编码的静态资源（图片/字体/媒体）。
+        """
+        base_domain = urlparse(base_url).netloc
+        pending_js_urls = {
+            url
+            for url, local_path in parse_result.resource_map.items()
+            if isinstance(local_path, str) and local_path.lower().endswith(".js")
+        }
+        processed_js_urls = set()
+
+        while pending_js_urls - processed_js_urls:
+            current_batch = list(pending_js_urls - processed_js_urls)
+            for js_url in current_batch:
+                processed_js_urls.add(js_url)
+                local_path = parse_result.resource_map.get(js_url)
+                if not local_path:
+                    continue
+
+                js_file = Path(self.output_dir) / local_path
+                if not js_file.exists():
+                    continue
+
+                try:
+                    js_text = js_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                new_resources = parse_external_js_assets(
+                    js_text,
+                    js_url,
+                    parse_result.resource_map,
+                    base_domain,
+                )
+                if not new_resources:
+                    continue
+
+                if self.verbose:
+                    console.print(
+                        f"[dim]  🔗 JS 子资源: {js_url} → {len(new_resources)} 个新资源[/]"
+                    )
+                js_download_results = await downloader.download_all(
+                    new_resources, Path(self.output_dir)
+                )
+                self._sync_resource_map_with_download_results(
+                    parse_result.resource_map, js_download_results
+                )
+
+            pending_js_urls = {
+                url
+                for url, local_path in parse_result.resource_map.items()
+                if isinstance(local_path, str) and local_path.lower().endswith(".js")
+            }
+
+    @staticmethod
+    def _sync_resource_map_with_download_results(
+        resource_map: dict[str, str],
+        download_results: dict,
+    ) -> None:
+        """将下载去重后的真实落盘路径回写到资源映射表"""
+        for url, result in download_results.items():
+            if getattr(result, "success", False) and getattr(result, "local_path", ""):
+                resource_map[url] = result.local_path
+            else:
+                resource_map.pop(url, None)
+
+    def _fix_dedup_paths(
+        self,
+        html: str,
+        download_results: dict,
+        resource_map: dict[str, str],
+    ) -> str:
+        """修复因哈希去重导致的路径变化"""
+        for url, result in download_results.items():
+            if result.success and result.local_path != resource_map.get(url):
+                original_path = f"./{resource_map.get(url, '')}"
+                new_path = f"./{result.local_path}"
+
+                if original_path and new_path and original_path != new_path:
+                    html = html.replace(original_path, new_path)
+        return html
+
+    def _print_banner(self) -> None:
+        banner = Text()
+        banner.append("🕷️  WebThief", style="bold white")
+        banner.append(" v1.0.0\n", style="dim")
+        banner.append("   高保真网站克隆工具", style="cyan")
+
+        panel = Panel(
+            banner,
+            border_style="bright_blue",
+            padding=(1, 2),
+        )
+        console.print(panel)
+        console.print(f"[bold]🎯 目标: [cyan]{self.url}[/][/]")
+        
+        # 显示策略信息
+        if self._strategy_result:
+            strategy = self._strategy_result.strategy
+            console.print(f"[bold]📋 策略: [yellow]{strategy.display_name}[/] (置信度: {self._strategy_result.confidence}%)")
+
+    def _print_summary(self, elapsed: float, downloader: Downloader, storage: Storage) -> None:
+        summary = Text()
+        summary.append("\n🎉 克隆完成!\n\n", style="bold green")
+        summary.append(f"  ⏱  耗时: {elapsed:.1f} 秒\n", style="white")
+        summary.append(f"  📥 下载: {downloader.total_downloaded} 文件\n", style="white")
+        summary.append(f"  ⏭  去重: {downloader.total_skipped} 文件\n", style="cyan")
+        if downloader.total_failed:
+            summary.append(f"  ✗  失败: {downloader.total_failed} 文件\n", style="red")
+        summary.append(f"  📦 总量: {downloader._format_size(downloader.total_bytes)}\n", style="white")
+        summary.append(f"  📂 输出: {storage.get_output_path()}\n", style="white")
+        
+        # 显示限制提示
+        if self._strategy_result and self._strategy_result.has_limitations:
+            summary.append(f"  ⚠  限制: {len(self._strategy_result.limitations)} 项\n", style="yellow")
+        
+        summary.append("\n  💡 打开 index.html 即可离线浏览", style="dim")
+
+        panel = Panel(
+            summary,
+            title="[bold green]✅ 完成[/]",
+            border_style="green",
+            padding=(0, 2),
+        )
+        console.print(panel)
+
+    def _print_site_summary(self, elapsed: float) -> None:
+        summary = Text()
+        summary.append("\n🎉 站点抓取完成!\n\n", style="bold green")
+        summary.append(f"  ⏱  耗时: {elapsed:.1f} 秒\n", style="white")
+        summary.append(f"  📂 输出: {Path(self.output_dir).resolve()}\n", style="white")
+        summary.append("  📄 报告: crawl_report.json\n", style="white")
+        summary.append("\n  💡 从 index.html 开始本地浏览", style="dim")
+        panel = Panel(
+            summary,
+            title="[bold green]✅ 完成[/]",
+            border_style="green",
+            padding=(0, 2),
+        )
+        console.print(panel)
